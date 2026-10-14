@@ -1,0 +1,12 @@
+[project]
+name = "sirwattson"
+version = "0.1.0"
+description = "Tesla Model 3 charge limiter driven by a Shelly EM on the main feed"
+requires-python = ">=3.11"
+dependencies = ["aiohttp>=3.9", "aioesphomeapi>=24"]
+
+[dependency-groups]
+dev = ["pytest>=8", "esphome>=2025.1"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

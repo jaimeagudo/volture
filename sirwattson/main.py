@@ -1,0 +1,51 @@
+from __future__ import annotations
+
+import argparse
+import asyncio
+import logging
+import time
+
+import aiohttp
+
+from .car import EsphomeCar, SimHttpCar
+from .controller import Config, Controller, Reading
+
+log = logging.getLogger("sirwattson")
+
+
+async def read_shelly(session: aiohttp.ClientSession, url: str) -> Reading | None:
+    try:
+        async with session.get(f"{url}/emeter/0") as r:
+            r.raise_for_status()
+            d = await r.json()
+            return Reading(float(d["power"]), bool(d.get("is_valid", False)))
+    except Exception as e:  # network error, bad JSON, HTTP error -> treated as no reading
+        log.warning("shelly read failed: %s", e)
+        return None
+
+
+async def run(shelly_url: str, car, poll_s: float) -> None:
+    ctrl = Controller(Config())
+    timeout = aiohttp.ClientTimeout(total=3)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        while True:
+            reading = await read_shelly(session, shelly_url)
+            cmd = ctrl.tick(time.monotonic(), reading)
+            log.info("reading=%s -> %s", reading, cmd)
+            if cmd:
+                await car.apply(cmd)
+            await asyncio.sleep(poll_s)
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--shelly-url", default="http://localhost:8081")
+    ap.add_argument("--car", choices=["sim", "esphome"], default="sim")
+    ap.add_argument("--sim-url", default="http://localhost:8081")
+    ap.add_argument("--esphome-host")
+    ap.add_argument("--esphome-psk")
+    ap.add_argument("--poll", type=float, default=5.0)
+    a = ap.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    car = SimHttpCar(a.sim_url) if a.car == "sim" else EsphomeCar(a.esphome_host, a.esphome_psk)
+    asyncio.run(run(a.shelly_url, car, a.poll))

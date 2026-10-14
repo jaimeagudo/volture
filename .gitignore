@@ -219,3 +219,8 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 secrets.yaml
+
+# ESPHome build output (esp32.yaml), local scratch, agent worktrees
+.esphome/
+.tmp/
+.claude/

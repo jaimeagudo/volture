@@ -1,405 +1,260 @@
 # SirWattson
 
-Limitador de carga para un **Tesla Model 3** que evita superar la **potencia contratada de 4,6 kW (20 A)** de la vivienda. Un medidor **Shelly EM** con pinza en la acometida general mide el consumo total; un programa en Python decide cuántos amperios (5-32 A) puede usar el coche y se los ordena a un **ESP32** que habla con el Tesla por Bluetooth Low Energy.
+**Charge a Tesla Model 3 at home as fast as possible without ever tripping the house's 4.6 kW contracted power limit.**
 
-> **Estado del proyecto (octubre 2026):** el controlador, el simulador y los tests funcionan sin hardware. Falta flashear el ESP32, emparejarlo con el coche, recibir el Shelly y escribir la conexión real con el ESP32 (`EsphomeCar`). Ver [Estado y pendientes](#estado-y-pendientes).
+A **Shelly EM** clamp on the main feed measures what the whole house draws. A small Python program reads it every 5 s and decides how many amps (5–32 A) the car may use right now. It sends that number to an **ESP32**, which talks to the car over Bluetooth Low Energy (BLE). When the oven turns on, the car slows down; when it turns off, the car speeds up again.
 
-> **Aviso de seguridad:** esto es una ayuda de gestión de carga, **no un dispositivo de protección**. No sustituye al ICP/limitador de la compañía ni al magnetotérmico. Un fallo del software no debe poder causar un riesgo eléctrico; por eso el diseño falla hacia "cargar menos" (ver [Modo seguro](#modo-seguro)).
+> **Safety:** this is a load *manager*, not a protection device. It does not replace the utility's power limiter or the breakers. Every failure mode is designed to end in "charge less" or "stop charging" (see [Fail-safe](#fail-safe)).
 
----
+## Status (October 2026)
 
-## Índice
-
-1. [Arquitectura](#arquitectura)
-2. [Decisiones y conclusiones](#decisiones-y-conclusiones)
-3. [Algoritmo de control](#algoritmo-de-control)
-4. [Estructura del repositorio](#estructura-del-repositorio)
-5. [Guía para principiantes (desde cero)](#guía-para-principiantes-desde-cero)
-6. [Estado y pendientes](#estado-y-pendientes)
-7. [Posibles mejoras](#posibles-mejoras)
-8. [Enlaces](#enlaces)
+| Piece | State |
+|---|---|
+| Control algorithm + tests | Done, 7 tests pass |
+| Simulator (fake Shelly + fake car) | Done, run end to end |
+| ESP32 firmware | Built from `esp32.yaml`, flashed, on Wi-Fi as `sirwattson.local` |
+| Mac → ESP32 commands (`EsphomeCar`) | Done; ESP32 confirmed receiving "set amps" and "charging on/off" |
+| ESP32 → car | **Next:** pair the ESP32 with the car (`python -m sirwattson.pair`, sitting in the car) |
+| Shelly EM | **Waiting for delivery** |
 
 ---
 
-## Arquitectura
+## How it works
 
 ```text
-                 acometida general (230 V, monofásica)
-                          |
-                 [pinza 50 A] --> Shelly EM (Gen1) --Wi-Fi--+
-                                                            |  HTTP GET /emeter/0 (cada 5 s)
-                                                            v
-  +-------------------------------------------------------------+
-  |  SirWattson (este repo, Python, corre en un Mac/Raspberry)  |
-  |   shelly.py  ->  Controller (puro)  ->  Car (interfaz)      |
-  +-------------------------------------------------------------+
-                                   | API nativa de ESPHome (aioesphomeapi), Wi-Fi
-                                   v
-                       ESP32 "Elegoo" (ESP32 clásico)
-                       firmware yoziru/esphome-tesla-ble
-                                   | Bluetooth Low Energy
-                                   v
-                              Tesla Model 3
+          main feed (230 V, single phase)
+                    |
+            [clamp] --> Shelly EM (Gen1) ---Wi-Fi, HTTP GET /emeter/0 every 5 s---+
+                                                                                   v
+   +-------------------------------------------------------------------------------+
+   |  SirWattson (Python, on a Mac / Raspberry Pi)                                 |
+   |  read Shelly  ->  controller.py (pure decision)  ->  car.py (send command)    |
+   +-------------------------------------------------------------------------------+
+                                  | ESPHome native API, encrypted, Wi-Fi
+                                  v
+                    ESP32 running esp32.yaml (yoziru/esphome-tesla-ble firmware)
+                                  | Bluetooth Low Energy
+                                  v
+                            Tesla Model 3
 ```
 
-**Piezas:**
-
-| Pieza | Función |
+| Piece | Job |
 |---|---|
-| Shelly EM (Gen1) + pinza 50 A | Mide la potencia total de la casa (incluye el coche, porque la pinza está en la acometida). |
-| ESP32 clásico (Elegoo, chip USB CP2102) | Ejecuta el firmware de terceros que habla BLE con el coche: fijar amperios, iniciar/parar carga, leer estado. |
-| SirWattson (Python) | Lee el Shelly, calcula el amperaje permitido y lo manda al ESP32. No usa Home Assistant. |
-| Simulador (`sim.py`, `sim_server.py`) | Imita el Shelly y un Model 3 para probar sin hardware. |
+| Shelly EM Gen1 + clamp | Measures total house power, car included (the clamp is on the main feed). |
+| ESP32 (Elegoo, classic ESP32-D0WD-V3, 4 MB flash, CP2102 USB chip) | Runs third-party firmware that speaks Tesla's BLE protocol: set amps, start/stop charging. |
+| SirWattson (this repo) | Reads the Shelly, decides the amps, tells the ESP32. No Home Assistant. |
+| Simulator | Fake Shelly and fake car, to test everything without hardware. |
 
-**Principio de diseño:** `controller.py` es una función pura (tiempo + lectura -> orden). No hace red ni lee relojes, así que se prueba con tests deterministas. Todo lo que toca el mundo exterior (HTTP al Shelly, ESP32, simulador) está detrás de interfaces pequeñas y se intercambia sin tocar el algoritmo.
-
----
-
-## Decisiones y conclusiones
-
-### 1. Shelly EM Gen1 en lugar de Gen3
-
-Se compró el **Gen1 (37 €)** frente al Gen3 (60 €). Razonamiento:
-
-- Para un "lector de potencia" basta. Mide potencia, tensión y un indicador `is_valid`, y se consulta con un `GET` simple.
-- El Gen3 sí mide tensión y es una plataforma activa (API RPC, Bluetooth, scripts), mientras que la rama de firmware Gen1 está estancada en la 1.14.0 de 2023 y solo recibe correcciones. Ese es el único argumento sólido a favor del Gen3, y se aceptó el riesgo.
-- El historial interno (365 días en Gen1, 10 en Gen3) **no importa**: el algoritmo decide cada pocos segundos y los datos históricos, si se quieren, se guardan fuera.
-- **Corrección de un error previo:** se afirmó que el Gen3 "asume la tensión"; no era correcto. Esa idea venía de un mensaje de foro sobre un montaje de 240 V en EE. UU. y no de la documentación del dispositivo.
-
-### 2. El Shelly no puede hablar con el Tesla
-
-Se estudió programar el Gen3 con scripts para eliminar el ESP32. **No es viable:**
-
-- Los scripts de Shelly solo escanean anuncios BLE; no se ha encontrado ninguna función para abrir una conexión GATT y escribir en el coche.
-- Los scripts tienen unos 25 KB de memoria (código + ejecución) e intérprete tipo ES5; el protocolo del Tesla exige criptografía de curva elíptica y mensajes protobuf.
-- El hardware admite un único escaneo BLE a la vez.
-
-Conclusión: **el ESP32 es imprescindible** para el BLE, y el Shelly solo mide.
-
-### 3. Un único "cerebro" fuera del ESP32, sin Home Assistant
-
-Se quiere implementar el algoritmo sin Home Assistant. El ESP32 con el firmware de yoziru expone sus controles como entidades de ESPHome, accesibles por **API nativa** o por **REST (`web_server`)**.
-
-| | REST (`web_server`) | API nativa (`aioesphomeapi`) |
-|---|---|---|
-| Prueba rápida | `curl` | Requiere script Python |
-| Estado | Hay que sondear | Suscripción a cambios |
-| Seguridad | Sin autenticación por defecto; expone el control del coche en la LAN | Cifrado con clave (`noise_psk`) |
-
-**Decisión:** API nativa con `aioesphomeapi`. REST queda descartado como vía principal por la seguridad.
-
-### 4. Python 3.11+ con asyncio
-
-Hay librería oficial (`aioesphomeapi`) para el protocolo del ESP32, el servidor HTTP del simulador usa `aiohttp`, y el controlador solo depende de la biblioteca estándar. Eso permite ejecutar los tests aunque no haya red ni dependencias instaladas.
-
-### 5. Elección de placa ESP32
-
-- El repositorio de yoziru da soporte a **M5Stack NanoC6, AtomS3 y ESP32 genérico (clásico `esp32dev`)**.
-- Se usa un **Elegoo ESP32 clásico**, así que el paquete correcto es `esp32-generic`. No usar el paquete genérico con variantes C3/S3.
-- Se evaluó la **Seeed XIAO ESP32-C6**: es el mismo chip que la NanoC6 pero exigiría crear un archivo de placa propio; su ventaja real sería la antena externa. El enlace de Amazon que se compartió parecía ser la **XIAO ESP32-S3 Sense**, que no es recomendable aquí. Zigbee/Thread/AWS/Azure no aportan nada a este proyecto.
-
-### 6. Dónde va la pinza
-
-**En la acometida general**, rodeando **un solo conductor** (no fase y neutro juntos; se anularía). Así el Shelly ve el total de la casa, y el controlador reduce el coche cuando el total se acerca al límite. Si la potencia sale negativa, la pinza está al revés.
-
-### 7. Límites elegidos
-
-- Potencia contratada: 4.600 W (20 A a 230 V). Se asume **red monofásica de 230 V**.
-- **Techo operativo: 4.370 W (19 A)**, dejando ~230 W de margen porque otros consumos llegan con retardo.
-- Rango del cargador: **5-32 A**.
-
-### 8. Correcciones al diseño inicial del algoritmo
-
-- **Umbral de reinicio:** la primera propuesta era reiniciar por debajo de 3,91 kW, pero a 5 A el coche suma 1.150 W y se superaría la potencia contratada. Ahora se reinicia solo si *casa + 5 A* cabe bajo el techo (casa < 3.220 W). Hay un test.
-- **Bajada proporcional:** en lugar de bajar 1 o 3 A fijos, se calcula cuántos amperios sobran con \( \lceil (P - 4370) / 230 \rceil \). Así un pico grande se corrige en un solo paso.
+**Design rule:** `controller.py` is pure: (time, reading) in, command out. No network, no clock. Everything that touches the outside world sits behind small adapters (`car.py`, `read_shelly`), so the algorithm is tested deterministically and hardware can be swapped without touching it.
 
 ---
 
-## Algoritmo de control
+## Control algorithm
 
-Se ejecuta cada 5 s con la lectura del Shelly (`power`, `is_valid`).
+Runs every 5 s with the Shelly reading (`power`, `is_valid`). Limits: contracted power **4,600 W** (20 A × 230 V); working ceiling **4,370 W** (19 A), leaving ~230 W of headroom for loads that switch on between readings.
 
-| Situación | Acción |
+| Situation | Action |
 |---|---|
-| Cargando y potencia > 4.370 W | Baja \( \lceil (P-4370)/230 \rceil \) A, mínimo 5 A |
-| Ya a 5 A y potencia > 4.600 W | Detiene la carga |
-| Cargando y potencia <= 4.140 W (4.370 - 230) | Sube 1 A como máximo cada 15 s, hasta 32 A |
-| Entre 4.140 y 4.370 W | Mantiene |
-| Detenido y (casa + 5 A) <= 4.370 W durante 60 s | Reinicia a 5 A |
-| Lectura inválida o Shelly sin respuesta | Baja a 5 A; si dura 30 s, detiene la carga |
+| Charging and power > 4,370 W | Drop ⌈(P − 4,370) / 230⌉ A at once, minimum 5 A |
+| Already at 5 A and power > 4,600 W | Stop charging |
+| Charging and power ≤ 4,140 W | Raise 1 A, at most every 15 s, up to 32 A |
+| Between 4,140 and 4,370 W | Hold |
+| Stopped and house + 5 A fits under 4,370 W for 60 s | Restart at 5 A |
+| Believed stopped but power > 4,600 W | Send "stop" (at most every 15 s): the car may be charging without us, e.g. started from the Tesla app |
+| Shelly unreachable or `is_valid: false` | Drop to 5 A; after 30 s, stop |
 
-### Modo seguro
+### Fail-safe
 
-Si el Shelly no responde o reporta `is_valid: false`, el controlador **no sigue ordenando potencia a ciegas**: baja a 5 A y, pasados 30 s, para. El campo `is_valid` del Gen1 se trata como "no usar esta lectura".
+- **No trustworthy reading → charge less, then stop.** The controller never keeps commanding power blind.
+- **A failed command to the car is logged and the loop continues.** The next readings still see the real power and issue further (lower or stop) commands.
+- **Known gap:** commands are fire-and-forget. The ESP32 reports the outcome in its `last_command` entity, but SirWattson does not read it yet (see [To do](#to-do)).
 
 ---
 
-## Estructura del repositorio
+## Repository layout
 
 ```text
 SirWattson/
+├── esp32.yaml            # ESP32 firmware config (pulls yoziru/esphome-tesla-ble, pinned release)
+├── secrets.example.yaml  # Template for secrets.yaml (gitignored), shared by firmware and Python
 ├── sirwattson/
-│   ├── controller.py    # Lógica pura de control (sin E/S)
-│   ├── sim.py           # Modelo del Model 3 y de la casa
-│   ├── sim_server.py    # Shelly Gen1 falso + endpoint que hace de ESP32
-│   ├── car.py           # SimHttpCar (simulado) y EsphomeCar (pendiente)
-│   └── main.py          # Bucle: lee Shelly -> decide -> manda al coche
+│   ├── controller.py     # Pure control logic
+│   ├── car.py            # SimHttpCar (simulator) and EsphomeCar (real ESP32)
+│   ├── main.py           # Loop: read Shelly -> decide -> command car
+│   ├── pair.py           # One-off: pair the ESP32's key with the car
+│   ├── secrets.py        # Reads secrets.yaml
+│   ├── sim.py            # Model 3 + house model
+│   └── sim_server.py     # Fake Shelly Gen1 + fake car HTTP endpoints
 ├── tests/test_controller.py
-├── secrets.example.yaml # Plantilla de secretos (el real está en .gitignore)
-├── pyproject.toml
-└── README.md
+└── pyproject.toml
 ```
 
 ---
 
-## Guía para principiantes (desde cero)
+## Setup guide (from zero, macOS)
 
-Supone un **Mac** y ningún conocimiento previo. Los comandos se escriben en la app **Terminal** (Spotlight: pulsa `Cmd + Espacio`, escribe "Terminal", Enter). Copia cada bloque tal cual y pulsa Enter.
+Commands go in the **Terminal** app (`Cmd + Space`, type "Terminal", Enter). Copy each block and press Enter.
 
-### Paso 0. Qué necesitas
+**You do not need to install ESP-IDF or the ESP-IDF Installation Manager.** ESPHome downloads the whole ESP32 toolchain by itself on the first build.
 
-- Un Mac con conexión a internet.
-- El **ESP32** (Elegoo, clásico) y un **cable USB de datos** (muchos cables son solo de carga y no funcionan).
-- Tu **Tesla Model 3** y su **tarjeta NFC**.
-- El **Shelly EM Gen1** con pinza (para la parte real; no es necesario para el simulador).
-- Un móvil **Android** (recomendado) para obtener la dirección Bluetooth del coche.
-
-### Paso 1. Instalar las herramientas
-
-1. **Homebrew** (instalador de programas para Mac):
-   ```bash
-   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-   ```
-   Al terminar, sigue las instrucciones "Next steps" que imprime para añadirlo al PATH.
-2. **Git y uv** (uv gestiona Python y las dependencias):
-   ```bash
-   brew install git uv
-   ```
-3. Comprueba:
-   ```bash
-   git --version
-   uv --version
-   ```
-
-### Paso 2. Descargar los proyectos
+### 1. Install the tools
 
 ```bash
-mkdir -p ~/github && cd ~/github
-git clone git@github.com:jaimeagudo/sirwattson.git SirWattson
-git clone https://github.com/yoziru/esphome-tesla-ble.git
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"   # Homebrew
+brew install git uv
 ```
 
-Si `git clone` por SSH falla, usa la dirección HTTPS: `https://github.com/jaimeagudo/sirwattson.git`.
+`uv` installs Python and every dependency, ESPHome included.
 
-### Paso 3. Probar el controlador (sin hardware)
+### 2. Get the code and run the tests
 
 ```bash
+git clone https://github.com/jaimeagudo/sirwattson.git ~/github/SirWattson
 cd ~/github/SirWattson
-uv sync --python 3.13
-python3 -m unittest discover -s tests -v
+uv sync
+uv run python -m unittest discover -s tests -v
 ```
 
-Deben pasar los **6 tests**. Los tests no necesitan instalar nada extra, solo `python3`.
+All 7 tests must pass. Python 3.12–3.14 works.
 
-> **Nota:** el desarrollo se hizo con Python 3.14 del sistema, pero no está comprobado que `esphome` y `aioesphomeapi` lo soporten. Por eso se recomienda `--python 3.13`.
+### 3. Try the simulator (no hardware)
 
-### Paso 4. Ejecutar el simulador
-
-Abre **dos ventanas de Terminal**.
-
-**Terminal 1** (Shelly y coche falsos):
+Terminal 1, the fake Shelly and car:
 ```bash
-cd ~/github/SirWattson
 uv run python -m sirwattson.sim_server
 ```
 
-**Terminal 2** (el controlador):
+Terminal 2, the controller:
 ```bash
-cd ~/github/SirWattson
 uv run python -m sirwattson.main
 ```
 
-Verás cómo el controlador arranca la carga a 5 A tras 60 s y sube 1 A cada 15 s. Pruebas desde una tercera ventana:
+After 60 s charging starts at 5 A, then rises 1 A every 15 s. From a third terminal:
 
 ```bash
-# Estado actual de la simulación
-curl localhost:8081/_sim/state
-
-# Simular un horno: la casa pasa a consumir 3.500 W
-curl -X POST "localhost:8081/_sim/base?w=3500"
-
-# Volver a la normalidad
-curl -X POST "localhost:8081/_sim/base?w=650"
-
-# Simular que el Shelly da lecturas inválidas
-curl -X POST "localhost:8081/_sim/shelly?valid=0"
-
-# Simular que el Shelly se apaga
-curl -X POST "localhost:8081/_sim/shelly?online=0"
+curl localhost:8081/_sim/state                    # current state
+curl -X POST "localhost:8081/_sim/base?w=3500"    # an oven turns on
+curl -X POST "localhost:8081/_sim/base?w=650"     # back to normal
+curl -X POST "localhost:8081/_sim/shelly?valid=0" # Shelly reports invalid readings
+curl -X POST "localhost:8081/_sim/shelly?online=0"  # Shelly goes offline
 ```
 
-Para parar cualquier programa: `Ctrl + C`.
+Stop any program with `Ctrl + C`.
 
-### Paso 5. Configurar los secretos
-
-El archivo `secrets.yaml` guarda tus datos privados y **está en `.gitignore`: nunca se sube a GitHub**. Hay una plantilla:
+### 4. Fill in the secrets
 
 ```bash
-cd ~/github/SirWattson
-cp secrets.example.yaml secrets.yaml   # solo si aún no existe
-open -e secrets.yaml                   # lo abre en TextEdit
+cp secrets.example.yaml secrets.yaml && open -e secrets.yaml
 ```
 
-Rellena:
-
-| Clave | Qué es |
+| Key | What it is |
 |---|---|
-| `wifi_ssid` | Nombre de tu Wi-Fi (el ESP32 solo soporta **2,4 GHz**) |
-| `wifi_password` | Contraseña de la Wi-Fi |
-| `tesla_vin` | VIN del coche (17 caracteres, en la ficha o en la app Tesla) |
-| `tesla_ble_mac_address` | Dirección Bluetooth del coche (ver Paso 6) |
+| `wifi_ssid`, `wifi_password` | Your Wi-Fi. It must offer **2.4 GHz**; the ESP32 cannot use 5 GHz. |
+| `wifi_hotspot_password` | 8+ characters. The ESP32 opens its own Wi-Fi with it if it cannot join yours. |
+| `api_encryption_key` | Encrypts Mac ↔ ESP32 traffic. Generate it with the command in the template. |
+| `tesla_vin` | The car's VIN (17 characters, in the Tesla app). |
+| `ble_mac_address` | The car's Bluetooth **MAC address**, `AA:BB:CC:DD:EE:FF` (digits 0–9 and letters A–F only, so `0` is zero, never the letter `O`). See step 6. |
 
-### Paso 6. Obtener la dirección Bluetooth (MAC) del coche
+`secrets.yaml` is gitignored: it never reaches GitHub.
 
-El coche emite constantemente un anuncio BLE con un nombre derivado del VIN, sin necesidad de despertarlo.
+### 5. Flash the ESP32 (first time, over USB)
 
-**Opción A (recomendada): móvil Android**
-1. Instala la app **nRF Connect**.
-2. Acércate al coche y escanea.
-3. Busca un dispositivo cuyo nombre tenga **18 caracteres, empiece por `S` y acabe en `C`** (por ejemplo `S1a87a5a75f3df858C`).
-4. Copia su dirección (formato `A0:B1:C2:D3:E4:F5`) en `tesla_ble_mac_address`.
-
-**Opción B: sin Android.** iOS no muestra la MAC. El firmware incluye un modo de escucha temporal: hay que descomentar `listener: !include listener.yml` en `packages/base.yml` del proyecto `esphome-tesla-ble`, compilar, flashear y leer la MAC en el registro (`make logs`); luego se vuelve a comentar la línea y se hace `make clean`.
-
-### Paso 7. Flashear el ESP32
-
-1. Conecta el ESP32 al Mac con el cable USB de datos.
-2. Comprueba que el Mac lo ve:
+1. Plug the ESP32 in with a **data** USB cable (many cables only charge).
+2. Check the Mac sees it:
    ```bash
-   ls /dev/cu.* | grep -i usb
+   ls /dev/cu.usbserial*
    ```
-   Debe aparecer algo como `/dev/cu.usbserial-0001`. Si **no** aparece nada: prueba otro cable y otro puerto; si sigue sin aparecer, instala el driver **CP210x** de Silicon Labs (el chip USB del Elegoo es un CP2102).
-3. Copia los secretos al proyecto del firmware. **Revisa antes** el archivo `secrets.yaml.example` de `esphome-tesla-ble`, porque los nombres de las claves del Wi-Fi deben coincidir con los que espera ese proyecto:
+   Expect `/dev/cu.usbserial-0001`. Nothing? Try another cable or port, then install Silicon Labs' **CP210x** driver.
+3. Build and flash (the first build downloads the toolchain and takes a few minutes):
    ```bash
-   cd ~/github/esphome-tesla-ble
-   cat secrets.yaml.example
-   cp ~/github/SirWattson/secrets.yaml secrets.yaml
+   uv run esphome run esp32.yaml --device /dev/cu.usbserial-0001
    ```
-   Si los nombres no coinciden, edita el `secrets.yaml` copiado.
-4. Valida, compila y flashea (la primera compilación descarga herramientas y tarda varios minutos):
+   It ends by streaming the ESP32 log. `wifi: Connected` means it is on your network. `Ctrl + C` to leave.
+
+Later updates go over Wi-Fi: `uv run esphome run esp32.yaml --device sirwattson.local`.
+
+### 6. Find the car's Bluetooth MAC address
+
+The car constantly advertises a Bluetooth name derived from the VIN: `S` + 16 hex characters + `C`. You need the **MAC address** of that advertisement, not the name.
+
+- **Android (easiest):** install **nRF Connect**, scan next to the car, find the 18-character `S…C` name, copy the MAC shown under it.
+- **No Android** (iPhones hide MAC addresses): in `esp32.yaml`, uncomment the `tesla_ble_listener` block, flash, take the ESP32 next to the car and watch the log for `Found Tesla vehicle | Name: … | MAC: …`. Put the MAC in `secrets.yaml`, comment the block again and flash again.
+
+### 7. Pair the ESP32 with the car (in the car)
+
+1. Sit in the car with the ESP32 powered and within Bluetooth range, and the Mac on the same Wi-Fi.
+2. Run:
    ```bash
-   make validate-config BOARD=esp32-generic
-   make compile BOARD=esp32-generic
-   make upload BOARD=esp32-generic
-   make logs
+   uv run python -m sirwattson.pair
    ```
-   Si el envío termina al 100 % con un error, la placa no coincide con el chip; comprueba que usas `esp32-generic`.
+3. **Immediately** tap the NFC key card on the centre console and confirm the prompt on the car's screen.
+4. Check *Controls → Locks*: a new key ("Unknown device") appears. Rename it to "SirWattson" if you like.
 
-### Paso 8. Emparejar el ESP32 con el coche
+The key is paired with the **`CHARGING_MANAGER`** role (set in `esp32.yaml`): it can start/stop charging and set amps, but cannot unlock or drive. Changing the role requires pairing again.
 
-1. Siéntate en el coche con el ESP32 encendido y dentro de alcance.
-2. Inicia el emparejamiento ("Pair BLE key") y **apoya inmediatamente la tarjeta NFC en la consola central**.
-3. Confirma el aviso en la pantalla del coche.
-4. Verifica en *Controles > Cerraduras* que aparece una llave nueva ("Unknown device"); puedes renombrarla.
+### 8. Install the Shelly EM
 
-El rol de la llave determina lo que puede hacer: `DRIVER` (acceso completo, por defecto) o `CHARGING_MANAGER` (solo carga). Para este proyecto `CHARGING_MANAGER` sería suficiente y más seguro; cambiarlo exige volver a emparejar.
+1. Power the Shelly, join its Wi-Fi `shellyem-XXXXXXXXXXXX`, open `http://192.168.33.1/` and enter your Wi-Fi.
+2. Reserve a **fixed IP** for it in your router; update its firmware.
+3. Put the clamp around **one single conductor** of the main feed (not phase and neutral together: they cancel out). **If you are not comfortable working in the electrical panel, have an electrician do it.**
+4. Check: `curl http://SHELLY_IP/emeter/0` returns `power`, `voltage`, `is_valid`. Switch on a known load (a heater): `power` must rise by that amount and be **positive**. Negative means the clamp is backwards.
 
-> **Pendiente de verificar:** la documentación del firmware describe el botón "Pair BLE key" dentro de Home Assistant. Aún no se ha comprobado cómo pulsarlo **sin** Home Assistant (por ejemplo, con `aioesphomeapi` o con el servidor web de ESPHome). Hasta entonces, el emparejamiento puede hacerse una única vez con un Home Assistant temporal.
-
-### Paso 9. Instalar y configurar el Shelly EM (cuando llegue)
-
-1. Alimenta el Shelly y conéctate al punto de acceso Wi-Fi `shellyem-XXXXXXXXXXXX`.
-2. Abre `http://192.168.33.1/` y configura tu Wi-Fi.
-3. Reserva una **IP fija** para el Shelly en tu router.
-4. Actualiza el firmware y, si quieres, activa la autenticación HTTP.
-5. Instala la pinza en la acometida, rodeando **un solo conductor**.
-6. Comprueba la lectura:
-   ```bash
-   curl http://IP_DEL_SHELLY/shelly
-   curl http://IP_DEL_SHELLY/emeter/0
-   ```
-   `/emeter/0` debe devolver `power`, `voltage` e `is_valid`.
-7. Verifica con un aparato de potencia conocida (un radiador) que `power` es correcto y positivo.
-
-> Instalar una pinza en el cuadro eléctrico implica manipular la instalación. Si no estás seguro, **que lo haga un electricista**.
-
-### Paso 10. Ejecutar con el hardware real
+### 9. Run for real
 
 ```bash
-cd ~/github/SirWattson
-uv run python -m sirwattson.main --shelly-url http://IP_DEL_SHELLY --car esphome \
-    --esphome-host IP_DEL_ESP32 --esphome-psk CLAVE_DE_CIFRADO
+uv run python -m sirwattson.main --shelly-url http://SHELLY_IP --car esphome
 ```
 
-> `--car esphome` **aún no funciona**: `EsphomeCar` es un esqueleto que lanza `NotImplementedError`. Los nombres de las entidades del firmware se conocen solo tras el primer flasheo (ver [pendientes](#estado-y-pendientes)).
+The ESP32 address defaults to `sirwattson.local`; the encryption key is read from `secrets.yaml`.
 
-### Problemas frecuentes
+### Troubleshooting
 
-| Síntoma | Causa probable |
+| Symptom | Likely cause |
 |---|---|
-| `ls /dev/cu.*` no muestra el ESP32 | Cable solo de carga, puerto defectuoso o falta el driver CP210x |
-| `uv sync` falla con "Operation not permitted" o error de red | Sin internet o ruta de caché sin permisos; prueba `UV_CACHE_DIR=/tmp/uv-cache uv sync` |
-| El emparejamiento falla con error HMAC | MAC o VIN incorrectos en `secrets.yaml` |
-| "Found Tesla vehicle" nunca aparece | La MAC no es la del anuncio BLE correcto |
-| `Finishing update failed` al flashear | Se usó el paquete de otra placa; usa `esp32-generic` |
-| El controlador baja a 5 A y para | El Shelly no responde o devuelve `is_valid: false` (comportamiento esperado) |
+| No `/dev/cu.usbserial*` | Charge-only cable, bad port, or missing CP210x driver |
+| ESP32 log: `wifi … Auth Expired` once, then `Connected` | Normal on some routers: it retries |
+| ESP32 never connects to Wi-Fi | Wrong password, or the network is 5 GHz only |
+| `Invalid encryption key` | `api_encryption_key` differs from the one the ESP32 was flashed with: flash again |
+| `Timeout while resolving IP address for sirwattson.local` | The Mac has not discovered the new name yet; retry, or pass `--esphome-host <IP>` |
+| ESP32 log: `Command failed: … Connection lost` | Car out of Bluetooth range, asleep, or not paired yet |
+| Pairing: no prompt on the car | Wrong MAC/VIN in `secrets.yaml`, or the NFC card was not tapped right away |
+| Upload ends with `Finishing update failed` | Firmware built for another board; this board needs `tesla-ble-esp32-generic` |
+| Controller drops to 5 A then stops | Shelly unreachable or `is_valid: false` (intended fail-safe) |
 
 ---
 
-## Estado y pendientes
+## Decisions
 
-**Hecho**
-- Controlador con tests (rampa, otros consumos, picos, reinicio, fallo del Shelly).
-- Simulador de Shelly Gen1 y de Model 3 con servidor HTTP.
-- Bucle principal y esqueleto del coche real.
-- Detección del ESP32 en USB (CP2102).
-
-**No hecho / sin verificar**
-- Flashear el firmware (no se pudo compilar desde el entorno de desarrollo por no tener red).
-- Escribir `EsphomeCar` con `aioesphomeapi` (faltan los nombres reales de las entidades).
-- Emparejamiento sin Home Assistant (ver Paso 8).
-- `sim_server.py` y `main.py` **no se han ejecutado** todavía; solo se han probado el controlador y el simulador con unittest.
-- **Velocidad de refresco de la potencia del Shelly Gen1:** no se ha encontrado el dato; se medirá con `curl` cada segundo. Determina cuánto se puede acortar el ciclo de 5 s.
-- Si `esphome` y `aioesphomeapi` funcionan con Python 3.14.
-- Cuántos clientes simultáneos admite la API nativa del firmware.
-- Que la instalación sea realmente **monofásica a 230 V** y que el consumo máximo previsto de la casa quede dentro del rango de la pinza de 50 A (mide hasta ~50 A con precisión, satura cerca de 85 A).
-- La pinza incluida en el Shelly Gen1 comprado (existen versiones de 50 A y de 120 A).
+1. **Shelly EM Gen1 (€37) over Gen3 (€60).** Power + `is_valid` over a plain HTTP GET is all that's needed; on-device history is irrelevant because decisions happen every few seconds. Accepted risk: Gen1 firmware is frozen at 1.14.0 (2023) and only gets fixes.
+2. **The Shelly cannot replace the ESP32.** Shelly scripts can only scan BLE adverts (no GATT connection) and have ~25 KB of memory; Tesla's BLE protocol needs elliptic-curve crypto and protobuf.
+3. **One brain, outside the ESP32, no Home Assistant.** The ESP32 just relays commands; all logic is in testable Python.
+4. **ESPHome native API instead of its REST web server.** The native API is encrypted with a key and pushes state changes; REST has no authentication by default and would expose car control to the whole LAN.
+5. **Firmware from `esp32.yaml`, not a local clone.** `esp32.yaml` pulls the yoziru firmware from GitHub at a pinned release. No clone, no Makefile; upgrading is changing `tesla_ble_ref` (and the matching `esphome` version in `pyproject.toml`).
+6. **Least-privileged car key** (`CHARGING_MANAGER`): a leaked key can only affect charging.
+7. **One secrets file** shared by firmware and Python, with the key names the firmware requires.
+8. **Board:** classic ESP32 → `tesla-ble-esp32-generic`. Alternatives (M5Stack NanoC6, Seeed XIAO ESP32-C6) only matter if Bluetooth range in the garage turns out poor (external antenna).
+9. **Restart threshold:** restart only if *house + 5 A* fits under the ceiling (house < 3,220 W); restarting below 3,910 W, as first proposed, would exceed the contracted power at 5 A.
+10. **Proportional drop:** one step of ⌈(P − 4,370) / 230⌉ A corrects a big spike at once instead of 1 A per cycle.
 
 ---
 
-## Posibles mejoras
+## To do
 
-- **Excedente solar:** modo que ajuste los amperios al sobrante fotovoltaico, además del límite de potencia.
-- **Histórico y gráficas:** registrar potencia, amperios y estado (CSV, Prometheus o Grafana) para ajustar umbrales.
-- **Ejecución como servicio:** `launchd` en macOS o `systemd` en una Raspberry Pi, con reinicio automático y logs.
-- **Despliegue en una Raspberry Pi o NAS** encendido 24 h en lugar de un Mac.
-- **Contenedor Docker** para reproducir el entorno.
-- **Tensión real:** usar la tensión que reporta el Shelly en lugar de los 230 V fijos.
-- **Instalaciones trifásicas:** extender el modelo a tres fases (Shelly 3EM).
-- **Migrar a Shelly EM Gen3** si interesa una plataforma con firmware activo.
-- **Persistencia del estado** para retomar tras un reinicio sin detener la carga.
-- **Calibración automática** del margen de seguridad con datos reales.
-- **Tarifas horarias:** programar la carga en las horas valle.
-- **Notificaciones** (Telegram, correo) ante fallos del Shelly o del ESP32.
-- **Límite de batería** y horario de salida configurables.
-- **Tests de integración** con `aioesphomeapi` contra un ESP32 simulado.
-- **Antena externa** o placa alternativa (XIAO ESP32-C6, NanoC6) si la cobertura BLE en el garaje es mala.
+- Pair with the car and run a real charge (step 7), then with the Shelly (steps 8–9).
+- Read the ESP32's `last_command` / `charger` state so the controller knows when a command did not reach the car.
+- Measure how often the Shelly Gen1 refreshes `power` (`curl` every second); it bounds how short the 5 s cycle can be.
+- Confirm the installation is single-phase 230 V and the clamp model (50 A or 120 A) covers the house's peak.
+- Run as a service (`launchd` on macOS, `systemd` on a Raspberry Pi) so it survives reboots.
+
+## Possible improvements
+
+Solar-surplus mode · history and charts (CSV/Prometheus/Grafana) · use the Shelly's measured voltage instead of a fixed 230 V · three-phase support (Shelly 3EM) · off-peak scheduling · failure notifications · external-antenna board if BLE range is poor.
 
 ---
 
-## Enlaces
+## Links
 
-**Proyecto del que depende (firmware del ESP32)**
-- [yoziru/esphome-tesla-ble](https://github.com/yoziru/esphome-tesla-ble): firmware ESPHome para controlar un Tesla por BLE.
-- [PedroKTFC/esphome-tesla-ble](https://github.com/PedroKTFC/esphome-tesla-ble): fork con variantes, útil como referencia.
-
-**Shelly**
-- [API Gen1](https://shelly-api-docs.shelly.cloud/gen1/): referencia REST del Shelly EM original.
-- [Shelly EM (Gen1)](https://kb.shelly.cloud/knowledge-base/shelly-em) y [Shelly EM Gen3](https://kb.shelly.cloud/knowledge-base/shelly-em-gen3) en la base de conocimiento oficial.
-- [Historial de firmware](https://shelly.wiki/en/firmware-versions/): estado de las ramas Gen1 y Gen2/3.
-
-**ESPHome y Python**
-- [aioesphomeapi](https://github.com/esphome/aioesphomeapi): cliente Python de la API nativa de ESPHome.
-- [API nativa de ESPHome](https://esphome.io/components/api/) y [API web/REST](https://esphome.io/web-api/).
-- [Seeed XIAO ESP32-C6 para ESPHome](https://github.com/DerekSeaman/ESPHome-Seeed-Xiao-ESP32-C6-Config): configuración de referencia si se cambia de placa.
-- [uv](https://docs.astral.sh/uv/): gestor de entornos y dependencias de Python.
+- [yoziru/esphome-tesla-ble](https://github.com/yoziru/esphome-tesla-ble): the ESP32 firmware this project runs
+- [Shelly Gen1 API](https://shelly-api-docs.shelly.cloud/gen1/) · [Shelly EM](https://kb.shelly.cloud/knowledge-base/shelly-em)
+- [aioesphomeapi](https://github.com/esphome/aioesphomeapi): Python client for the ESPHome native API
+- [ESPHome native API](https://esphome.io/components/api/) · [uv](https://docs.astral.sh/uv/)

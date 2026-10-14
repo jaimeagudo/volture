@@ -63,6 +63,15 @@ class ControllerTests(unittest.TestCase):
         h.run(300)
         self.assertFalse(h.car.charging)
 
+    def test_stops_charging_it_did_not_start(self):
+        # Car already charging at 32 A when SirWattson starts (or started from the Tesla app):
+        # the controller believes it is stopped, but must still stop it once over the contracted power.
+        h = Harness(650)
+        h.car.charging, h.car.amps = True, 32       # 650 + 32*230 = 8010 W
+        h.run(30)
+        self.assertFalse(h.car.charging)
+        self.assertLessEqual(h.total(), 4600)
+
     def test_invalid_reading_fails_safe(self):
         h = Harness(650)
         h.run(400)

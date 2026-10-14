@@ -1,8 +1,18 @@
+"""Car adapters: turn a controller Command into an action on the (simulated or real) car.
+
+Both raise on failure; main.py catches, logs and keeps the control loop running.
+"""
 from __future__ import annotations
 
 import aiohttp
+from aioesphomeapi import APIClient
 
 from .controller import Command
+
+# object_id of the entities exposed by the yoziru/esphome-tesla-ble firmware (listed from the flashed ESP32).
+AMPS_ENTITY = "charging_amps"   # number: charging current setpoint (A)
+CHARGER_ENTITY = "charger"      # switch: start/stop charging
+ESPHOME_API_PORT = 6053
 
 
 class SimHttpCar:
@@ -12,16 +22,54 @@ class SimHttpCar:
         self.base_url = base_url.rstrip("/")
 
     async def apply(self, cmd: Command) -> None:
-        async with aiohttp.ClientSession() as s:
-            await s.post(f"{self.base_url}/_sim/car",
-                         json={"charging": cmd.charging, "amps": cmd.amps})
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{self.base_url}/_sim/car",
+                                    json={"charging": cmd.charging, "amps": cmd.amps}) as resp:
+                resp.raise_for_status()
 
 
 class EsphomeCar:
-    """TODO: aioesphomeapi client for the yoziru firmware (entity names after first flash)."""
+    """Drives the car through the ESP32 over the ESPHome native API (encrypted with noise_psk).
+
+    Connects lazily and drops the connection on any error, so the next command reconnects.
+    The ESP32 only forwards the command over BLE; it reaches the car only if it is paired and in range.
+    """
 
     def __init__(self, host: str, noise_psk: str):
-        raise NotImplementedError("Implement after the ESP32 is flashed and entity IDs are known")
+        self.host, self.noise_psk = host, noise_psk
+        self.client: APIClient | None = None
+        self.keys: dict[str, int] = {}
+
+    async def _connect(self) -> APIClient:
+        if self.client is not None:
+            return self.client
+        client = APIClient(self.host, ESPHOME_API_PORT, None, noise_psk=self.noise_psk)
+        await client.connect(login=True)
+        entities, _services = await client.list_entities_services()
+        self.keys = {entity.object_id: entity.key for entity in entities}
+        missing = {AMPS_ENTITY, CHARGER_ENTITY} - self.keys.keys()
+        if missing:
+            await client.disconnect()
+            raise RuntimeError(f"ESP32 firmware lacks entities {sorted(missing)}")
+        self.client = client
+        return client
 
     async def apply(self, cmd: Command) -> None:
-        raise NotImplementedError
+        try:
+            client = await self._connect()
+            if cmd.charging:
+                # Amps first, so charging never (re)starts at a stale, higher setpoint.
+                client.number_command(self.keys[AMPS_ENTITY], float(cmd.amps))
+            client.switch_command(self.keys[CHARGER_ENTITY], cmd.charging)
+        except Exception:
+            await self.close()
+            raise
+
+    async def close(self) -> None:
+        client, self.client = self.client, None
+        if client is None:
+            return
+        try:
+            await client.disconnect()
+        except Exception:  # already broken; nothing left to release
+            pass

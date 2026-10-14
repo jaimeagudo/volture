@@ -71,6 +71,15 @@ class Controller:
         p = reading.power_w
 
         if not self.charging:
+            # Over the contracted power while we believe the car is stopped: the car may be
+            # charging without us (already charging at startup, or started from the Tesla app).
+            # A stop to an idle car is harmless, so send one, at most every ramp_up_every_s.
+            # Cost: if the house alone exceeds the limit, the car gets (and may wake for) repeated stops.
+            if p > c.emergency_limit_w:
+                self.low_since = None
+                if now - self.last_change >= c.ramp_up_every_s:
+                    return self._stop(now)
+                return None
             # Only restart if house + minimum charge still fits under the ceiling.
             if p + c.min_amps * c.voltage_v <= c.working_limit_w:
                 if self.low_since is None:

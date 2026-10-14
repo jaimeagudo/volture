@@ -9,6 +9,7 @@ import aiohttp
 
 from .car import EsphomeCar, SimHttpCar
 from .controller import Config, Controller, Reading
+from .secrets import read_secret
 
 log = logging.getLogger("sirwattson")
 
@@ -33,7 +34,12 @@ async def run(shelly_url: str, car, poll_s: float) -> None:
             cmd = ctrl.tick(time.monotonic(), reading)
             log.info("reading=%s -> %s", reading, cmd)
             if cmd:
-                await car.apply(cmd)
+                try:
+                    await car.apply(cmd)
+                except Exception as e:
+                    # Keep looping: the next ticks re-evaluate power and, if still over the
+                    # limit, issue another (lower or stop) command.
+                    log.error("car command %s failed: %s", cmd, e)
             await asyncio.sleep(poll_s)
 
 
@@ -42,10 +48,12 @@ if __name__ == "__main__":
     ap.add_argument("--shelly-url", default="http://localhost:8081")
     ap.add_argument("--car", choices=["sim", "esphome"], default="sim")
     ap.add_argument("--sim-url", default="http://localhost:8081")
-    ap.add_argument("--esphome-host")
-    ap.add_argument("--esphome-psk")
+    ap.add_argument("--esphome-host", default="sirwattson.local")
     ap.add_argument("--poll", type=float, default=5.0)
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    car = SimHttpCar(a.sim_url) if a.car == "sim" else EsphomeCar(a.esphome_host, a.esphome_psk)
+    if a.car == "sim":
+        car = SimHttpCar(a.sim_url)
+    else:
+        car = EsphomeCar(a.esphome_host, read_secret("api_encryption_key"))
     asyncio.run(run(a.shelly_url, car, a.poll))

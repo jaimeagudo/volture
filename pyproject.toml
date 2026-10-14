@@ -2,11 +2,12 @@
 name = "sirwattson"
 version = "0.1.0"
 description = "Tesla Model 3 charge limiter driven by a Shelly EM on the main feed"
-requires-python = ">=3.11"
-dependencies = ["aiohttp>=3.9", "aioesphomeapi>=24"]
+requires-python = ">=3.12,<3.15"  # esphome 2026.9.1 range
+dependencies = ["aiohttp>=3.9", "aioesphomeapi>=24", "pyyaml>=6"]
 
 [dependency-groups]
-dev = ["pytest>=8", "esphome>=2025.1"]
+# esphome builds/flashes esp32.yaml; pinned to the minimum the firmware release in esp32.yaml requires.
+dev = ["pytest>=8", "esphome==2026.9.1"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

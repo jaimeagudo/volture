@@ -1,0 +1,44 @@
+# ESP32 firmware for SirWattson: the yoziru/esphome-tesla-ble firmware, pulled from GitHub
+# and pinned to a release tag, plus the few settings this project needs.
+#
+#   uv run esphome run esp32.yaml --device /dev/cu.usbserial-0001   # first flash, over USB
+#   uv run esphome run esp32.yaml --device sirwattson.local          # later updates, over Wi-Fi
+#
+# Secrets come from ./secrets.yaml (gitignored, template: secrets.example.yaml).
+
+substitutions:
+  # Firmware release. Each release states the minimum ESPHome version; keep pyproject.toml in sync.
+  tesla_ble_ref: v2026.10.1
+  ble_mac_address: !secret ble_mac_address
+  tesla_vin: !secret tesla_vin
+
+packages:
+  yoziru.esphome-tesla-ble:
+    url: https://github.com/yoziru/esphome-tesla-ble.git
+    ref: ${tesla_ble_ref}
+    # Classic ESP32 (Elegoo board, chip ESP32-D0WD-V3, 4 MB flash).
+    files: [tesla-ble-esp32-generic.dashboard.yml]
+
+esphome:
+  name: sirwattson
+  friendly_name: SirWattson
+
+# The firmware defaults to DRIVER (unlock, open trunk...). SirWattson only needs charging,
+# so the paired key gets the least-privileged role. Changing it later requires re-pairing.
+tesla_ble_vehicle:
+  role: CHARGING_MANAGER
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    password: !secret wifi_hotspot_password
+
+# Uncomment to find the car's BLE MAC: the log prints "Found Tesla vehicle | ... | MAC: ...".
+# Put that MAC in secrets.yaml (ble_mac_address), comment this block again and reflash.
+# tesla_ble_listener:
+#   vin: !secret tesla_vin

@@ -1,7 +1,7 @@
 """One-off: ask the ESP32 to pair its BLE key with the car (no Home Assistant needed).
 
 Run it sitting in the car, then tap the NFC key card on the console and confirm on the screen:
-    uv run python -m sirwattson.pair [--esphome-host sirwattson.local]
+    uv run python -m volture.pair [--esphome-host volture.local]
 """
 from __future__ import annotations
 
@@ -34,6 +34,6 @@ async def pair(host: str, noise_psk: str) -> None:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--esphome-host", default="sirwattson.local")
+    ap.add_argument("--esphome-host", default="volture.local")
     a = ap.parse_args()
     asyncio.run(pair(a.esphome_host, read_secret("api_encryption_key")))

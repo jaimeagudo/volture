@@ -2,7 +2,7 @@
 
 The Shelly clamp sits on the main feed, so its reading already includes the car.
 No I/O here: feed it (time, reading, local hour) and it returns a Command when something changes.
-Every tunable lives in Config, filled from the `sirwattson:` block of secrets.yaml (see settings.py).
+Every tunable lives in Config, filled from the `volture:` block of secrets.yaml (see settings.py).
 """
 from __future__ import annotations
 

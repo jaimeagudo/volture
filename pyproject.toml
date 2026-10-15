@@ -1,5 +1,5 @@
 [project]
-name = "sirwattson"
+name = "volture"
 version = "0.1.0"
 description = "Tesla Model 3 charge limiter driven by a Shelly EM on the main feed"
 requires-python = ">=3.12,<3.15"  # esphome 2026.9.1 range

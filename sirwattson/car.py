@@ -21,7 +21,7 @@ CHARGER_ENTITY = "charger"          # switch: charging on/off, as reported by th
 LAST_COMMAND_ENTITY = "last_command"  # text: firmware's outcome of the last BLE command (logged only)
 ESPHOME_API_PORT = 6053
 
-log = logging.getLogger("sirwattson.car")
+log = logging.getLogger("volture.car")
 
 
 class EsphomeCar:
@@ -36,7 +36,7 @@ class EsphomeCar:
     async def start(self) -> None:
         self.client = APIClient(self.host, ESPHOME_API_PORT, None, noise_psk=self.noise_psk)
         self.reconnect = ReconnectLogic(client=self.client, on_connect=self._on_connect,
-                                        on_disconnect=self._on_disconnect, name="sirwattson-esp32")
+                                        on_disconnect=self._on_disconnect, name="volture-esp32")
         await self.reconnect.start()
 
     async def stop(self) -> None:

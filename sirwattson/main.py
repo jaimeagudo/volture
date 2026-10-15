@@ -1,8 +1,8 @@
 """Control loop: read the Shelly -> confirm the last command -> decide -> command the car.
 
-    uv run python -m sirwattson.main
+    uv run python -m volture.main
 
-Everything comes from secrets.yaml: `shelly_url` (real or fake Shelly) and, in the `sirwattson:`
+Everything comes from secrets.yaml: `shelly_url` (real or fake Shelly) and, in the `volture:`
 block, `car: esphome` (real car via the ESP32) or `car: sim` (the car of python -m simulator.server,
 served at shelly_url). `--car` overrides the setting for one run.
 """
@@ -24,7 +24,7 @@ from .confirm import Action, CarState, Pending, matches, reconcile
 from .controller import Command, Config, Controller, Reading
 from .secrets import CAR_KINDS, LoopSettings, read_secret, read_settings
 
-log = logging.getLogger("sirwattson")
+log = logging.getLogger("volture")
 FAKE_SHELLY_URL = "http://localhost:8081"  # simulator.server default port
 SHELLY_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=3)
 
@@ -112,7 +112,9 @@ async def run(shelly_url: str, car, cfg: Config, loop: LoopSettings) -> None:
 
 def make_car(kind: str, shelly_url: str, esphome_host: str):
     if kind == "sim":
-        from simulator.car import SimHttpCar  # simulator code is not needed in production
+        from simulator.car import (
+            SimHttpCar,  # simulator code is not needed in production
+        )
         return SimHttpCar(shelly_url)  # the simulator serves the fake Shelly and the fake car
     from .car import EsphomeCar
     return EsphomeCar(esphome_host, read_secret("api_encryption_key"))

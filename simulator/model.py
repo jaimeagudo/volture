@@ -1,7 +1,7 @@
 """Model 3 + house simulator. Single-phase, power = amps * voltage."""
 from __future__ import annotations
 
-from sirwattson.controller import Command
+from volture.controller import Command
 
 
 class SimCar:
@@ -17,7 +17,7 @@ class SimCar:
             self._pending.append((now + self.delay_s, cmd))
 
     def force(self, cmd: Command) -> None:
-        """A change made outside SirWattson (e.g. the Tesla app): immediate, regardless of reachability."""
+        """A change made outside volture (e.g. the Tesla app): immediate, regardless of reachability."""
         self._pending.clear()
         self.charging = cmd.charging
         self.amps = cmd.amps if cmd.charging else 0

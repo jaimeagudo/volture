@@ -1,12 +1,11 @@
-"""Simulated car adapter: same interface as sirwattson.car.EsphomeCar, backed by simulator.server."""
+"""Simulated car adapter: same interface as volture.car.EsphomeCar, backed by simulator.server."""
 from __future__ import annotations
 
 from typing import Optional
 
 import aiohttp
-
-from sirwattson.confirm import CarState
-from sirwattson.controller import Command
+from volture.confirm import CarState
+from volture.controller import Command
 
 HTTP_TIMEOUT = aiohttp.ClientTimeout(total=3)
 

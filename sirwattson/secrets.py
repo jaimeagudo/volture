@@ -1,6 +1,6 @@
 """Reads secrets.yaml: the single file for secrets AND settings, shared with the ESP32 firmware.
 
-Top-level keys are secrets (some used by esp32.yaml). The `sirwattson:` block holds every setting
+Top-level keys are secrets (some used by esp32.yaml). The `volture:` block holds every setting
 of the algorithm and the main loop; any key left out keeps its default (see Config, LoopSettings).
 """
 from __future__ import annotations
@@ -13,7 +13,7 @@ import yaml
 from .controller import Config
 
 SECRETS_PATH = Path(__file__).resolve().parent.parent / "secrets.yaml"
-SETTINGS_BLOCK = "sirwattson"
+SETTINGS_BLOCK = "volture"
 
 
 CAR_KINDS = ("esphome", "sim")
@@ -22,7 +22,7 @@ CAR_KINDS = ("esphome", "sim")
 @dataclass(frozen=True)
 class LoopSettings:
     car: str = "esphome"                 # esphome: real car via the ESP32; sim: simulator.server's car
-    esphome_host: str = "sirwattson.local"
+    esphome_host: str = "volture.local"
     poll_s: float = 5.0                  # how often the Shelly is read
     car_command_timeout_s: float = 10.0  # a command never stalls power readings longer than this
     confirm_timeout_s: float = 15.0      # wait this long for the car to report the commanded state

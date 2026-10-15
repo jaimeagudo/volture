@@ -1,8 +1,16 @@
 import unittest
 from dataclasses import replace
 
-from sirwattson.confirm import Action, CarState, Pending, reconcile
-from sirwattson.controller import Command, Config, Controller, Reading, effective_voltage, in_offpeak
+from volture.confirm import Action, CarState, Pending, reconcile
+from volture.controller import (
+    Command,
+    Config,
+    Controller,
+    Reading,
+    effective_voltage,
+    in_offpeak,
+)
+
 from simulator.model import World
 
 
@@ -67,7 +75,7 @@ class ControllerTests(unittest.TestCase):
         self.assertFalse(h.car.charging)
 
     def test_stops_charging_it_did_not_start(self):
-        # Car already charging at 32 A when SirWattson starts (or started from the Tesla app):
+        # Car already charging at 32 A when volture starts (or started from the Tesla app):
         # the controller believes it is stopped, but must still stop it once over the contracted power.
         h = Harness(650)
         h.car.charging, h.car.amps = True, 32       # 650 + 32*230 = 8010 W

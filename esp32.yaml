@@ -1,8 +1,8 @@
-# ESP32 firmware for SirWattson: the yoziru/esphome-tesla-ble firmware, pulled from GitHub
+# ESP32 firmware for volture: the yoziru/esphome-tesla-ble firmware, pulled from GitHub
 # and pinned to a release tag, plus the few settings this project needs.
 #
 #   uv run esphome run esp32.yaml --device /dev/cu.usbserial-0001   # first flash, over USB
-#   uv run esphome run esp32.yaml --device sirwattson.local          # later updates, over Wi-Fi
+#   uv run esphome run esp32.yaml --device volture.local          # later updates, over Wi-Fi
 #
 # Secrets come from ./secrets.yaml (gitignored, template: secrets.example.yaml).
 
@@ -20,10 +20,10 @@ packages:
     files: [tesla-ble-esp32-generic.dashboard.yml]
 
 esphome:
-  name: sirwattson
-  friendly_name: SirWattson
+  name: volture
+  friendly_name: volture
 
-# The firmware defaults to DRIVER (unlock, open trunk...). SirWattson only needs charging,
+# The firmware defaults to DRIVER (unlock, open trunk...). volture only needs charging,
 # so the paired key gets the least-privileged role. Changing it later requires re-pairing.
 tesla_ble_vehicle:
   role: CHARGING_MANAGER

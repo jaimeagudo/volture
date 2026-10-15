@@ -17,33 +17,32 @@ import argparse
 import time
 
 from aiohttp import web
-
-from sirwattson.controller import Command
+from volture.controller import Command
 
 from .model import World
 
 T0 = time.monotonic()
 
 # Control page. With `car: esphome` nothing commands the simulated car, so the power you type
-# is exactly what SirWattson reads. With `car: sim`, the simulated car's load is added on top.
+# is exactly what volture reads. With `car: sim`, the simulated car's load is added on top.
 CONTROL_PAGE = """<!doctype html><html><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>SirWattson simulator</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>volture simulator</title>
 <style>body{font:18px system-ui;margin:16px;max-width:440px}section{border:1px solid #ccc;border-radius:8px;padding:4px 12px;margin:0 0 16px}
 h2{font-size:20px;margin:8px 0}input[type=number]{font-size:22px;width:7ch}
 button{font-size:18px;padding:8px 14px;margin:4px 4px 0 0}pre{background:#eee;padding:8px;overflow-x:auto}</style>
-</head><body><h1>SirWattson simulator</h1>
+</head><body><h1>volture simulator</h1>
 <section><h2>Shelly (house meter)</h2>
 <form id="fw"><label>Power (W) <input type="number" id="w" step="50" min="-10000" max="30000"></label> <button>Set</button></form>
 <p><button data-w="650">650 W idle</button><button data-w="3500">3500 W oven</button><button data-w="5000">5000 W over limit</button></p>
 <form id="fv"><label>Voltage (V) <input type="number" id="v" step="1" min="0" max="300"></label> <button>Set</button></form>
 <p><label><input type="checkbox" id="valid"> is_valid</label> <label><input type="checkbox" id="online"> online</label></p>
-<p>SirWattson reads <code>/emeter/0</code>:</p><pre id="out">...</pre></section>
+<p>volture reads <code>/emeter/0</code>:</p><pre id="out">...</pre></section>
 <section><h2>Simulated car</h2>
 <p>Car: <b id="car">...</b></p>
 <p>Act as the Tesla app:</p>
 <form id="fa"><label>Amps <input type="number" id="a" value="32" min="1" max="48"></label> <button>Start charging</button></form>
 <p><button id="stop">Stop charging</button></p>
-<p><label title="Untick: the car silently ignores SirWattson, like out of Bluetooth range"><input type="checkbox" id="reachable"> reachable by SirWattson</label></p>
+<p><label title="Untick: the car silently ignores volture, like out of Bluetooth range"><input type="checkbox" id="reachable"> reachable by volture</label></p>
 <p><small>Adds load to the house only with <code>car: sim</code>.</small></p></section>
 <script>
 const post = (url, body) => fetch(url, {method: "POST", headers: {"content-type": "application/json"},
@@ -103,7 +102,7 @@ def make_app(world: World) -> web.Application:
         if request.query.get("force") == "1":
             world.car.force(cmd)  # the page acting as the Tesla app: immediate, always obeyed
         else:
-            world.car.command(cmd, now())  # SirWattson's command: delayed, lost if unreachable
+            world.car.command(cmd, now())  # volture's command: delayed, lost if unreachable
         return web.json_response({"ok": True})
 
     async def base(request):

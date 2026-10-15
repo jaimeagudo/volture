@@ -5,7 +5,6 @@
 //   tick <now> <power|-> <valid> <volts|-> <can_charge>   -> none | cmd <charging> <amps>
 //                                              (power "-": no reading, like an unreachable Shelly)
 //   adopt|follow_user <charging> <amps>     -> ok
-//   clear_user                              -> ok
 //   voltage <fallback_v> <volts|->          -> <volts used>   (effective_voltage)
 //   external <pending|-> <car|-> <car|->    -> 0|1
 //   can_charge <car|->                      -> 0|1
@@ -148,8 +147,6 @@ int main() {
           } else {
             ctrl->follow_user(charging_flag == 1, amps);
           }
-        } else if (op == "clear_user") {
-          ctrl->clear_user();
         } else {
           reply = "error unknown op " + op;
         }

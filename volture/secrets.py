@@ -16,12 +16,9 @@ SECRETS_PATH = Path(__file__).resolve().parent.parent / "secrets.yaml"
 SETTINGS_BLOCK = "volture"
 
 
-CAR_KINDS = ("esphome", "sim")
-
 
 @dataclass(frozen=True)
 class LoopSettings:
-    car: str = "esphome"                 # esphome: real car via the ESP32; sim: simulator.server's car
     esphome_host: str = "volture.local"
     poll_s: float = 5.0                  # how often the Shelly is read
     car_command_timeout_s: float = 10.0  # a command never stalls power readings longer than this
@@ -69,8 +66,6 @@ def read_settings(path: Path = SECRETS_PATH) -> tuple[Config, LoopSettings]:
 
 def _check(cfg: Config, loop: LoopSettings) -> None:
     problems = []
-    if loop.car not in CAR_KINDS:
-        problems.append(f"car must be one of {CAR_KINDS}")
     if not 0 < cfg.min_amps <= cfg.max_amps:
         problems.append("need 0 < min_amps <= max_amps")
     if cfg.working_limit_w <= 0:

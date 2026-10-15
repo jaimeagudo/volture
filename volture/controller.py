@@ -3,7 +3,9 @@
 The Shelly clamp sits on the main feed, so its reading already includes the car.
 No I/O here: feed it (time, reading) and it returns a Command when something changes.
 Every tunable lives in Config, filled from the `volture:` block of secrets.yaml (see secrets.py).
-There is deliberately no time-based scheduling: the car or the owner decide when to charge.
+Volture never starts a charge: the owner does (Tesla app, the car's schedule). While the car
+charges, Volture uses every amp that fits under the contracted power. The only start it ever
+sends resumes a charge Volture itself stopped to protect the contracted power.
 """
 from __future__ import annotations
 
@@ -60,20 +62,17 @@ class Controller:
         self.last_change = -math.inf
         self.low_since: Optional[float] = None
         self.invalid_since: Optional[float] = None
-        # The Tesla app has priority. user_paused: stopped from the app, never restart on our own.
-        # user_amps: started / set from the app: never ramp above it.
-        self.user_paused = False
-        self.user_amps: Optional[int] = None
+        # True only after Volture itself stopped a charge (power over the limit, no reading):
+        # the one case where it may start the car again.
+        self.paused_by_us = False
 
     def follow_user(self, charging: bool, amps: int) -> None:
-        """A change made outside Volture (Tesla app, the car itself): follow it from now on."""
-        self.adopt(charging, amps)
-        self.user_paused = not charging
-        self.user_amps = amps if charging else None
+        """A change made outside Volture (Tesla app, schedule, the car itself): take it as is.
 
-    def clear_user(self) -> None:
-        """Cable unplugged: the next charging session is Volture's again."""
-        self.user_paused, self.user_amps = False, None
+        A start is taken over (amps rise to whatever fits); a stop stays a stop.
+        """
+        self.adopt(charging, amps)
+        self.paused_by_us = False
 
     def adopt(self, charging: bool, amps: int) -> None:
         """Align the controller's belief with the car's reported state (see confirm.py)."""
@@ -81,14 +80,14 @@ class Controller:
         # A stale "low power since" would restart charging at once instead of after resume_after_s.
         self.low_since = None
 
-    def _set(self, amps: int, now: Optional[float] = None) -> Command:
-        self.charging, self.amps = True, amps
-        if now is not None:
-            self.last_change = now
+    def _set(self, amps: int, now: float) -> Command:
+        self.charging, self.amps, self.paused_by_us = True, amps, False
+        self.last_change = now
         return Command(True, amps)
 
-    def _stop(self, now: float) -> Command:
-        self.charging, self.amps = False, 0
+    def _stop(self, now: float, resumable: bool) -> Command:
+        """resumable: Volture stopped a charge it knew of, so it may restart it later."""
+        self.charging, self.amps, self.paused_by_us = False, 0, resumable
         self.last_change = now
         return Command(False, 0)
 
@@ -96,7 +95,6 @@ class Controller:
              car_can_charge: bool = True) -> Optional[Command]:
         """car_can_charge: False when the car is unplugged or at its battery charge limit."""
         c = self.cfg
-        max_amps = c.max_amps if self.user_amps is None else min(c.max_amps, self.user_amps)
         if reading is None or not reading.valid:
             self.low_since = None
             if self.invalid_since is None:
@@ -104,7 +102,7 @@ class Controller:
             if not self.charging:
                 return None
             if now - self.invalid_since >= c.stop_after_invalid_s:
-                return self._stop(now)
+                return self._stop(now, resumable=True)
             if self.amps > c.min_amps:
                 return self._set(c.min_amps, now)
             return None
@@ -116,15 +114,16 @@ class Controller:
             # Over the contracted power while we believe the car is stopped: the car may be
             # charging without us (already charging at startup, or started from the Tesla app).
             # A stop to an idle car is harmless, so send one, at most every ramp_up_every_s.
+            # Not resumable: Volture never starts a charge it did not know about.
             # Cost: if the house alone exceeds the limit, the car gets (and may wake for) repeated stops.
             if p > c.contracted_power_w:
                 self.low_since = None
                 if now - self.last_change >= c.ramp_up_every_s:
-                    return self._stop(now)
+                    return self._stop(now, resumable=self.paused_by_us)
                 return None
-            # Restart only if not stopped from the app, the car can take charge, and
+            # Restart only a charge Volture stopped itself, if the car can take charge and
             # house + minimum charge fits the ceiling.
-            if (not self.user_paused and car_can_charge
+            if (self.paused_by_us and car_can_charge
                     and p + c.min_amps * volts <= c.working_limit_w):
                 if self.low_since is None:
                     self.low_since = now
@@ -140,11 +139,11 @@ class Controller:
             target = self.amps - delta
             if target < c.min_amps:
                 if self.amps == c.min_amps and p > c.contracted_power_w:
-                    return self._stop(now)
+                    return self._stop(now, resumable=True)
                 target = c.min_amps
             return self._set(target, now) if target != self.amps else None
 
-        step = min(c.ramp_up_step_amps, max_amps - self.amps)
+        step = min(c.ramp_up_step_amps, c.max_amps - self.amps)
         if (step > 0
                 and p + step * volts <= c.working_limit_w
                 and now - self.last_change >= c.ramp_up_every_s):

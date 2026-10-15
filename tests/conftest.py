@@ -131,9 +131,6 @@ class CppController:
     def follow_user(self, charging: bool, amps: int) -> None:
         self.cli.ask(f"follow_user {flag(charging)} {amps}")
 
-    def clear_user(self) -> None:
-        self.cli.ask("clear_user")
-
 
 def cpp_backend(binary: Path, processes: list[CliProcess]) -> SimpleNamespace:
     def spawn() -> CliProcess:

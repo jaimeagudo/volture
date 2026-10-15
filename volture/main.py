@@ -1,10 +1,12 @@
 """Control loop: read the Shelly -> confirm the last command -> decide -> command the car.
 
-    uv run python -m volture.main
+    uv run python -m volture.main                           # real Shelly, real car
+    uv run python -m volture.main --sim-shelly              # fake Shelly, real car
+    uv run python -m volture.main --sim-car                 # real Shelly, simulated car
+    uv run python -m volture.main --sim-shelly --sim-car    # everything simulated
 
-Everything comes from secrets.yaml: `shelly_url` (real or fake Shelly) and, in the `volture:`
-block, `car: esphome` (real car via the ESP32) or `car: sim` (the car of python -m simulator.server,
-served at shelly_url). `--car` overrides the setting for one run.
+Real hardware: `shelly_url` and `volture: esphome_host` in secrets.yaml. Simulated pieces come
+from python -m simulator.server, at --sim-url (default http://localhost:8081).
 """
 from __future__ import annotations
 
@@ -12,7 +14,6 @@ import argparse
 import asyncio
 import logging
 import time
-from dataclasses import replace
 from typing import Optional
 
 import aiohttp
@@ -20,10 +21,10 @@ from yarl import URL
 
 from .confirm import Action, CarState, Pending, can_charge, external_change, matches, reconcile
 from .controller import Command, Config, Controller, Reading
-from .secrets import CAR_KINDS, LoopSettings, read_secret, read_settings
+from .secrets import LoopSettings, read_secret, read_settings
 
 log = logging.getLogger("volture")
-FAKE_SHELLY_URL = "http://localhost:8081"  # simulator.server default port
+SIM_URL = "http://localhost:8081"  # simulator.server default port
 SHELLY_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=3)
 
 
@@ -60,11 +61,9 @@ async def send(car, cmd: Command, loop: LoopSettings) -> None:
 async def confirm(ctrl: Controller, car, pending: Optional[Pending], last: Optional[CarState],
                   observed: Optional[CarState], now: float, loop: LoopSettings) -> Optional[Pending]:
     """Follow the car's reported state; re-send or adopt. Returns what stays pending."""
-    if observed is not None and observed.plugged is False and (ctrl.user_paused or ctrl.user_amps):
-        log.info("cable unplugged: Tesla app overrides cleared, next session is Volture's")
-        ctrl.clear_user()
     if external_change(pending, last, observed):
-        # Not what Volture asked for: the Tesla app (or the car itself) did it, and it has priority.
+        # Not what Volture asked for: the Tesla app, a schedule or the car itself did it.
+        # A start is taken over (amps rise to what fits); a stop stays a stop.
         log.warning("car changed outside Volture to %s: following it", observed)
         ctrl.follow_user(observed.charging, observed.amps)
         return None
@@ -117,30 +116,31 @@ async def run(shelly_url: str, car, cfg: Config, loop: LoopSettings) -> None:
         await car.stop()
 
 
-def make_car(kind: str, shelly_url: str, esphome_host: str):
-    if kind == "sim":
+def make_car(sim_car: bool, sim_url: str, esphome_host: str):
+    if sim_car:
         from simulator.car import (
             SimHttpCar,  # simulator code is not needed in production
         )
-        return SimHttpCar(shelly_url)  # the simulator serves the fake Shelly and the fake car
+        return SimHttpCar(sim_url)
     from .car import EsphomeCar
     return EsphomeCar(esphome_host, read_secret("api_encryption_key"))
 
 
 if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    # Default from secrets.yaml, so switching between fake and real Shelly is one edit there.
-    ap.add_argument("--shelly-url", default=read_secret("shelly_url", default=FAKE_SHELLY_URL))
-    ap.add_argument("--car", choices=CAR_KINDS, help="override `car:` in secrets.yaml for this run")
+    ap = argparse.ArgumentParser(description="Keep house + car under the contracted power.")
+    ap.add_argument("--sim-shelly", action="store_true", help="read the simulator's fake Shelly")
+    ap.add_argument("--sim-car", action="store_true", help="drive the simulator's car, not the real one")
+    ap.add_argument("--sim-url", default=SIM_URL, help=f"simulator.server address (default {SIM_URL})")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     config, loop_settings = read_settings()
-    if a.car:
-        loop_settings = replace(loop_settings, car=a.car)
-    log.info("reading power from %s", URL(a.shelly_url).with_user(None))  # never log credentials
+    shelly_url = a.sim_url if a.sim_shelly else read_secret("shelly_url")
+    log.info("reading power from %s (%s)", URL(shelly_url).with_user(None),  # never log credentials
+             "simulated" if a.sim_shelly else "real Shelly")
+    log.info("car: %s", f"simulated at {a.sim_url}" if a.sim_car else f"real, via {loop_settings.esphome_host}")
     log.info("settings: %s %s", config, loop_settings)
     try:
-        car = make_car(loop_settings.car, a.shelly_url, loop_settings.esphome_host)
-        asyncio.run(run(a.shelly_url, car, config, loop_settings))
+        car = make_car(a.sim_car, a.sim_url, loop_settings.esphome_host)
+        asyncio.run(run(shelly_url, car, config, loop_settings))
     except KeyboardInterrupt:
         pass

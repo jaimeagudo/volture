@@ -24,8 +24,8 @@ from .model import World
 
 T0 = time.monotonic()
 
-# Control page. With `car: esphome` nothing commands the simulated car, so the power you type
-# is exactly what volture reads. With `car: sim`, the simulated car's load is added on top.
+# Control page. The simulated car's load is added to the fake Shelly whenever it charges. Without
+# volture.main --sim-car nothing starts it, so the power you type is exactly what volture reads.
 CONTROL_PAGE = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>volture simulator</title>
 <style>body{font:18px system-ui;margin:16px;max-width:440px}section{border:1px solid #ccc;border-radius:8px;padding:4px 12px;margin:0 0 16px}
@@ -47,7 +47,7 @@ button{font-size:18px;padding:8px 14px;margin:4px 4px 0 0}pre{background:#eee;pa
 <label><input type="checkbox" id="plugged"> plugged in</label></p>
 <form id="fb"><label>Battery % <input type="number" id="b" min="0" max="100"></label>
 <label>Limit % <input type="number" id="l" min="50" max="100"></label> <button>Set</button></form>
-<p><small>Adds load to the house only with <code>car: sim</code>.</small></p></section>
+<p><small>Its load is added to the Shelly reading while it charges.</small></p></section>
 <script>
 const post = (url, body) => fetch(url, {method: "POST", headers: {"content-type": "application/json"},
   body: body === undefined ? undefined : JSON.stringify(body)}).then(refresh);

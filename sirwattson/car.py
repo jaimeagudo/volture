@@ -43,15 +43,14 @@ class EsphomeCar:
     async def _connect(self) -> APIClient:
         if self.client is not None:
             return self.client
-        client = APIClient(self.host, ESPHOME_API_PORT, None, noise_psk=self.noise_psk)
+        # Stored before connecting so a failed or cancelled (timed-out) attempt is still closed.
+        self.client = client = APIClient(self.host, ESPHOME_API_PORT, None, noise_psk=self.noise_psk)
         await client.connect(login=True)
         entities, _services = await client.list_entities_services()
         self.keys = {entity.object_id: entity.key for entity in entities}
         missing = {AMPS_ENTITY, CHARGER_ENTITY} - self.keys.keys()
         if missing:
-            await client.disconnect()
             raise RuntimeError(f"ESP32 firmware lacks entities {sorted(missing)}")
-        self.client = client
         return client
 
     async def apply(self, cmd: Command) -> None:
@@ -61,7 +60,7 @@ class EsphomeCar:
                 # Amps first, so charging never (re)starts at a stale, higher setpoint.
                 client.number_command(self.keys[AMPS_ENTITY], float(cmd.amps))
             client.switch_command(self.keys[CHARGER_ENTITY], cmd.charging)
-        except Exception:
+        except BaseException:  # BaseException: also a timeout cancellation from main.py
             await self.close()
             raise
 
@@ -70,6 +69,8 @@ class EsphomeCar:
         if client is None:
             return
         try:
-            await client.disconnect()
+            # force: drop the socket without waiting for a DisconnectResponse, which on a
+            # broken link takes another 10 s and would stall the control loop again.
+            await client.disconnect(force=True)
         except Exception:  # already broken; nothing left to release
             pass

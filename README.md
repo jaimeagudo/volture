@@ -59,7 +59,6 @@ Runs every `poll_s` with the Shelly reading (`power`, `voltage`, `is_valid`). Th
 
 | Situation                                                                  | Action                                                                                         |
 | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Outside the off-peak window (if set)                                       | Stop, and do not restart until the window opens                                                |
 | Charging and power > 4,370 W                                               | Drop ⌈(P − 4,370) / V⌉ A at once, minimum `min_amps` (5)                                       |
 | Already at 5 A and power > 4,600 W                                         | Stop charging                                                                                  |
 | Charging and power + `ramp_up_step_amps` × V ≤ 4,370 W                     | Raise `ramp_up_step_amps` (1) A, at most every `ramp_up_every_s` (15 s), up to `max_amps` (32) |
@@ -68,14 +67,13 @@ Runs every `poll_s` with the Shelly reading (`power`, `voltage`, `is_valid`). Th
 | Believed stopped but power > 4,600 W                                       | Send "stop" (at most every 15 s): the car may be charging without us                           |
 | Shelly unreachable or `is_valid: false`                                    | Drop to 5 A; after `stop_after_invalid_s` (30 s), stop                                         |
 
-**Off-peak window:** `offpeak_start_hour` / `offpeak_end_hour` are whole hours in `timezone` (Europe/Madrid, summer time handled). The window may cross midnight (22 → 7). Unset: charge any time. Weekends are not special-cased.
 
 **The Tesla app has priority.** Volture listens to the car's reported state through the ESP32: charging on/off, amps, cable connected, battery % and charge limit %. A change the car reports that is *not* what Volture asked for came from outside (the Tesla app, or the car itself), and Volture follows it:
 
 | Outside change                                              | What Volture does                                                     |
 | ----------------------------------------------------------- | --------------------------------------------------------------------- |
 | Charging stopped (app, or the car reached its charge limit) | Stays stopped: never restarts on its own                              |
-| Charging started, or amps changed, from the app             | Follows it; never ramps above those amps; ignores the off-peak window |
+| Charging started, or amps changed, from the app             | Follows it; never ramps above those amps |
 | Cable unplugged                                             | Clears the above: the next session is Volture's again                 |
 
 The house's contracted power still wins over the app: a 32 A charge started from the app is cut to what fits under 4,600 W.
@@ -194,7 +192,7 @@ cp secrets.example.yaml secrets.yaml && open -e secrets.yaml
 | `tesla_vin`                    | The car's VIN (17 characters, in the Tesla app).                                                                                                                                                                                                                                         |
 | `ble_mac_address`              | The car's Bluetooth **MAC address**, `AA:BB:CC:DD:EE:FF` (digits 0–9 and letters A–F only, so `0` is zero, never the letter `O`). See step 6.                                                                                                                                            |
 | `shelly_url`                   | Where volture reads power: `http://localhost:8081` (fake Shelly) or `http://SHELLY_IP` (real one).                                                                                                                                                                                       |
-| `volture:` block               | Every setting: `car: esphome` (real) or `sim`, `esphome_host`, the power limits, amps, steps, timings, off-peak hours and time zone. Each line is commented in the template; a missing line keeps its default; a typo or impossible value stops volture at startup with a clear message. |
+| `volture:` block               | Every setting: `car: esphome` (real) or `sim`, `esphome_host`, the power limits, amps, steps and timings. Each line is commented in the template; a missing line keeps its default; a typo or impossible value stops volture at startup with a clear message. |
 
 `secrets.yaml` is gitignored: it never reaches GitHub.
 
@@ -271,7 +269,7 @@ Everything comes from `secrets.yaml`; `--shelly-url` and `--car` override it for
 
 1. **Shelly EM Gen1 (€37) over Gen3 (€60).** Power + `is_valid` over a plain HTTP GET is all that's needed; on-device history is irrelevant because decisions happen every few seconds. Accepted risk: Gen1 firmware is frozen at 1.14.0 (2023) and only gets fixes.
 2. **The Shelly cannot replace the ESP32.** Shelly scripts can only scan BLE adverts (no GATT connection) and have ~25 KB of memory; Tesla's BLE protocol needs elliptic-curve crypto and protobuf.
-3. **One brain, outside the ESP32, no Home Assistant.** The ESP32 just relays commands; all logic is in testable Python.
+3. **Everything runs on the ESP32, 24/7, no other machine and no Home Assistant** (decided 2026-10-15; migration in progress). The control algorithm is ported to C++ on the ESP32. The Python version stays for debugging on a Mac, and both implementations must pass the same test scenarios so they cannot drift.
 4. **ESPHome native API instead of its REST web server.** The native API is encrypted with a key and pushes state changes; REST has no authentication by default and would expose car control to the whole LAN.
 5. **Firmware from `esp32.yaml`, not a local clone.** `esp32.yaml` pulls the yoziru firmware from GitHub at a pinned release. No clone, no Makefile; upgrading is changing `tesla_ble_ref` (and the matching `esphome` version in `pyproject.toml`).
 6. **Least-privileged car key** (`CHARGING_MANAGER`): a leaked key can only affect charging.
@@ -280,6 +278,7 @@ Everything comes from `secrets.yaml`; `--shelly-url` and `--car` override it for
 9. **Restart threshold:** restart only if *house + 5 A* fits under the ceiling (house < 3,220 W); restarting below 3,910 W, as first proposed, would exceed the contracted power at 5 A.
 10. **Proportional drop:** one step of ⌈(P − 4,370) / V⌉ A corrects a big spike at once instead of 1 A per cycle.
 11. **Confirm with the car's state, not `last_command` text:** the switch/amps states are structured; `last_command` is firmware prose that may change between releases.
+12. **No time-based charging, ever** (decided 2026-10-15). Volture has no schedule, off-peak window or clock-based rule. The car itself or the owner (Tesla app) decide when to charge, and whether the cable is plugged in. A schedule in Volture would duplicate the car's own scheduling: a second source of truth that drifts. Volture only keeps the house under its contracted power and follows the Tesla app.
 
 ---
 
@@ -293,7 +292,7 @@ Everything comes from `secrets.yaml`; `--shelly-url` and `--car` override it for
 
 ## Possible improvements
 
-Solar-surplus mode · history and charts (CSV/Prometheus/Grafana) · three-phase support (Shelly 3EM) · weekend / per-day off-peak rules · failure notifications · external-antenna board if BLE range is poor.
+Solar-surplus mode · history and charts (CSV/Prometheus/Grafana) · three-phase support (Shelly 3EM) · failure notifications · external-antenna board if BLE range is poor.
 
 ---
 

@@ -10,7 +10,23 @@ class SimCar:
         self.charging, self.amps = False, 0
         # False: commands are silently lost, like a car out of Bluetooth range.
         self.reachable = True
+        self.plugged = True
+        self.battery_pct, self.limit_pct = 50.0, 80.0  # set by hand on the page; no charging curve
         self._pending: list[tuple[float, Command]] = []
+
+    @property
+    def can_charge(self) -> bool:
+        return self.plugged and self.battery_pct < self.limit_pct
+
+    def _obey(self, cmd: Command) -> None:
+        # Like the real car: a start is refused when unplugged or at the charge limit.
+        self.charging = cmd.charging and self.can_charge
+        self.amps = cmd.amps if self.charging else 0
+
+    def settle(self) -> None:
+        """The car stops by itself when unplugged or when the battery reaches its limit."""
+        if self.charging and not self.can_charge:
+            self.charging, self.amps = False, 0
 
     def command(self, cmd: Command, now: float) -> None:
         if self.reachable:
@@ -19,15 +35,14 @@ class SimCar:
     def force(self, cmd: Command) -> None:
         """A change made outside volture (e.g. the Tesla app): immediate, regardless of reachability."""
         self._pending.clear()
-        self.charging = cmd.charging
-        self.amps = cmd.amps if cmd.charging else 0
+        self._obey(cmd)
 
     def advance(self, now: float) -> None:
         due = [c for t, c in self._pending if t <= now]
         self._pending = [(t, c) for t, c in self._pending if t > now]
         for c in due:
-            self.charging = c.charging
-            self.amps = c.amps if c.charging else 0
+            self._obey(c)
+        self.settle()
 
     @property
     def power_w(self) -> float:

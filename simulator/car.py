@@ -32,6 +32,7 @@ class SimHttpCar:
                 async with session.get(f"{self.base_url}/_sim/state") as resp:
                     resp.raise_for_status()
                     state = await resp.json()
-            return CarState(bool(state["car_charging"]), int(state["car_amps"]))
+            return CarState(bool(state["car_charging"]), int(state["car_amps"]), bool(state["car_plugged"]),
+                            float(state["car_battery_pct"]), float(state["car_limit_pct"]))
         except Exception:  # simulator down: the car's state is unknown, like an offline ESP32
             return None

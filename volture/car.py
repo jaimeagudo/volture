@@ -10,15 +10,22 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from aioesphomeapi import APIClient, ReconnectLogic
+from aioesphomeapi import (APIClient, BinarySensorState, NumberState, ReconnectLogic, SensorState,
+                           SwitchState, TextSensorState)
 
 from .confirm import CarState
 from .controller import Command
 
 # object_id of the entities exposed by the yoziru/esphome-tesla-ble firmware (listed from the flashed ESP32).
-AMPS_ENTITY = "charging_amps"       # number: charging current setpoint (A), as reported by the car
-CHARGER_ENTITY = "charger"          # switch: charging on/off, as reported by the car
+# "charger" names TWO entities with the same key: a switch (charging on/off) and a binary sensor
+# (cable connected), so states are told apart by type as well as key.
+AMPS_ENTITY = "charging_amps"         # number: charging current setpoint (A)
+CHARGER_ENTITY = "charger"            # switch: charging on/off; binary sensor: cable connected
+BATTERY_ENTITY = "battery"            # sensor: state of charge (%)
+LIMIT_ENTITY = "charging_limit"       # number: the car's charge limit (%)
+STATUS_ENTITY = "charging"            # text: Charging, Complete, Disconnected... (logged only)
 LAST_COMMAND_ENTITY = "last_command"  # text: firmware's outcome of the last BLE command (logged only)
+LOGGED_TEXTS = (STATUS_ENTITY, LAST_COMMAND_ENTITY)
 ESPHOME_API_PORT = 6053
 
 log = logging.getLogger("volture.car")
@@ -30,7 +37,7 @@ class EsphomeCar:
         self.client: Optional[APIClient] = None  # created in start(): it needs a running event loop
         self.connected = False
         self.keys: dict[str, int] = {}
-        self.states: dict[int, object] = {}  # entity key -> last reported value (missing = unknown)
+        self.states: dict[tuple[type, int], object] = {}  # (state type, key) -> value; absent = unknown
         self.reconnect: Optional[ReconnectLogic] = None
 
     async def start(self) -> None:
@@ -71,19 +78,32 @@ class EsphomeCar:
         log.warning("ESP32 disconnected")
 
     def _on_state(self, state) -> None:
+        slot = (type(state), state.key)
         if getattr(state, "missing_state", False):
-            self.states.pop(state.key, None)
+            self.states.pop(slot, None)
             return
-        if state.key == self.keys.get(LAST_COMMAND_ENTITY) and self.states.get(state.key) != state.state:
-            log.info("car last_command: %s", state.state)
-        self.states[state.key] = state.state
+        if isinstance(state, TextSensorState) and self.states.get(slot) != state.state:
+            name = next((n for n in LOGGED_TEXTS if self.keys.get(n) == state.key), None)
+            if name:
+                log.info("car %s: %s", name, state.state)
+        self.states[slot] = state.state
+
+    def _value(self, kind: type, entity: str):
+        key = self.keys.get(entity)
+        return None if key is None else self.states.get((kind, key))
 
     async def observe(self) -> Optional[CarState]:
-        charging = self.states.get(self.keys.get(CHARGER_ENTITY))
-        amps = self.states.get(self.keys.get(AMPS_ENTITY))
+        charging = self._value(SwitchState, CHARGER_ENTITY)
+        amps = self._value(NumberState, AMPS_ENTITY)
         if not self.connected or charging is None or amps is None:
             return None
-        return CarState(bool(charging), int(round(float(amps))))
+        plugged = self._value(BinarySensorState, CHARGER_ENTITY)
+        battery = self._value(SensorState, BATTERY_ENTITY)
+        limit = self._value(NumberState, LIMIT_ENTITY)
+        return CarState(bool(charging), int(round(float(amps))),
+                        None if plugged is None else bool(plugged),
+                        None if battery is None else float(battery),
+                        None if limit is None else float(limit))
 
     async def apply(self, cmd: Command) -> None:
         if not self.connected:

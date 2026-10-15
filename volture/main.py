@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 import aiohttp
 from yarl import URL
 
-from .confirm import Action, CarState, Pending, matches, reconcile
+from .confirm import Action, CarState, Pending, can_charge, external_change, matches, reconcile
 from .controller import Command, Config, Controller, Reading
 from .secrets import CAR_KINDS, LoopSettings, read_secret, read_settings
 
@@ -59,12 +59,20 @@ async def send(car, cmd: Command, loop: LoopSettings) -> None:
         log.error("car command %s failed: %r", cmd, e)
 
 
-async def confirm(ctrl: Controller, car, pending: Optional[Pending], observed: Optional[CarState],
-                  now: float, loop: LoopSettings) -> Optional[Pending]:
-    """Check the car obeyed the last command; re-send or adopt its state. Returns what stays pending."""
+async def confirm(ctrl: Controller, car, pending: Optional[Pending], last: Optional[CarState],
+                  observed: Optional[CarState], now: float, loop: LoopSettings) -> Optional[Pending]:
+    """Follow the car's reported state; re-send or adopt. Returns what stays pending."""
+    if observed is not None and observed.plugged is False and (ctrl.user_paused or ctrl.user_amps):
+        log.info("cable unplugged: Tesla app overrides cleared, next session is Volture's")
+        ctrl.clear_user()
+    if external_change(pending, last, observed):
+        # Not what Volture asked for: the Tesla app (or the car itself) did it, and it has priority.
+        log.warning("car changed outside Volture to %s: following it", observed)
+        ctrl.follow_user(observed.charging, observed.amps)
+        return None
     if pending is None:
         if observed is not None and not matches(Command(ctrl.charging, ctrl.amps), observed):
-            # The car changed without us (Tesla app, charge cable, car limit): follow reality.
+            # First report after startup (or after giving up on a command): align with reality.
             log.warning("car reports %s, controller believed charging=%s amps=%s: adopting",
                         observed, ctrl.charging, ctrl.amps)
             ctrl.adopt(observed.charging, observed.amps)
@@ -90,6 +98,7 @@ async def run(shelly_url: str, car, cfg: Config, loop: LoopSettings) -> None:
     ctrl = Controller(cfg)
     zone = ZoneInfo(loop.timezone)
     pending: Optional[Pending] = None
+    last: Optional[CarState] = None  # previous report, to tell Volture's changes from the app's
     await car.start()
     try:
         async with aiohttp.ClientSession(timeout=SHELLY_HTTP_TIMEOUT) as session:
@@ -97,8 +106,9 @@ async def run(shelly_url: str, car, cfg: Config, loop: LoopSettings) -> None:
                 now = time.monotonic()
                 reading = await read_shelly(session, shelly_url)
                 observed = await observe(car)
-                pending = await confirm(ctrl, car, pending, observed, now, loop)
-                cmd = ctrl.tick(now, reading, datetime.now(zone).hour)
+                pending = await confirm(ctrl, car, pending, last, observed, now, loop)
+                last = observed if observed is not None else last
+                cmd = ctrl.tick(now, reading, datetime.now(zone).hour, can_charge(observed))
                 log.info("reading=%s car=%s -> %s", reading, observed, cmd)
                 # A repeat of the unconfirmed command is left to confirm(): re-sending it here
                 # would restart its attempt count, so the car's state would never be adopted.

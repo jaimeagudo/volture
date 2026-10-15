@@ -79,9 +79,17 @@ http_request:
 web_server:
   port: 80
   version: 3
+  ota: false     # firmware updates only through `esphome run` (encrypted), never through the page
   auth:
+    type: digest  # the password itself never travels (basic would send it nearly in clear)
     username: volture
     password: !secret web_password
+  # Volture's own entities in their own sections, above the Tesla firmware's (lower weight = higher).
+  sorting_groups:
+    - {id: volture_live, name: "Volture", sorting_weight: -30}
+    - {id: volture_settings, name: "Volture settings", sorting_weight: -20}
+    - {id: volture_diagnostics, name: "Volture diagnostics", sorting_weight: -10}
+  js_include: esp32/web_logo.js  # the Volture logo at the top of the page
 
 debug:
   update_interval: 5s
@@ -94,7 +102,8 @@ time:
 switch:
   - platform: template
     id: grafana_push
-    name: Grafana push
+    name: Volture Grafana push
+    web_server: {sorting_group_id: volture_settings, sorting_weight: 3}
     icon: mdi:chart-line
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF  # off until switched on; then kept across reboots
@@ -103,6 +112,7 @@ switch:
   - platform: template
     id: volture_control
     name: Volture control
+    web_server: {sorting_group_id: volture_settings, sorting_weight: 1}
     icon: mdi:car-electric
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF  # off until switched on; then kept across reboots
@@ -110,7 +120,8 @@ switch:
 text:
   - platform: template
     id: shelly_url
-    name: Shelly URL
+    name: Volture Shelly EM URL
+    web_server: {sorting_group_id: volture_settings, sorting_weight: 2}
     mode: text
     optimistic: true
     restore_value: true
@@ -119,14 +130,16 @@ text:
 sensor:
   - platform: template
     id: house_power
-    name: House power
+    name: Volture house power
+    web_server: {sorting_group_id: volture_live, sorting_weight: 1}
     unit_of_measurement: W
     device_class: power
     accuracy_decimals: 0
     update_interval: never
   - platform: template
     id: grid_voltage
-    name: Grid voltage
+    name: Volture grid voltage
+    web_server: {sorting_group_id: volture_live, sorting_weight: 2}
     unit_of_measurement: V
     device_class: voltage
     accuracy_decimals: 0
@@ -134,30 +147,37 @@ sensor:
   - platform: template
     id: volture_amps
     name: Volture amps
+    web_server: {sorting_group_id: volture_live, sorting_weight: 3}
     unit_of_measurement: A
     device_class: current
     accuracy_decimals: 0
     update_interval: never
   - platform: debug
     free:
-      name: Heap free
+      name: Volture heap free
+      web_server: {sorting_group_id: volture_diagnostics, sorting_weight: 2}
     block:
-      name: Heap largest block
+      name: Volture heap largest block
+      web_server: {sorting_group_id: volture_diagnostics, sorting_weight: 3}
     min_free:
-      name: Heap min free
+      name: Volture heap min free
+      web_server: {sorting_group_id: volture_diagnostics, sorting_weight: 4}
 
 text_sensor:
   - platform: template
     id: volture_decision
     name: Volture decision
+    web_server: {sorting_group_id: volture_live, sorting_weight: 4}
     update_interval: never
   - platform: template
     id: volture_event
     name: Volture event
+    web_server: {sorting_group_id: volture_live, sorting_weight: 5}
     update_interval: never
   - platform: template
     id: grafana_status
-    name: Grafana push status
+    name: Volture Grafana push status
+    web_server: {sorting_group_id: volture_diagnostics, sorting_weight: 1}
     update_interval: never
 
 script:

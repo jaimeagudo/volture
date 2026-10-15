@@ -10,11 +10,11 @@ A **Shelly EM** clamp on the main feed measures what the whole house draws. A sm
 
 | Piece | State |
 |---|---|
-| Control algorithm + tests | Done, 7 tests pass |
-| Simulator (fake Shelly + fake car) | Done, run end to end |
+| Control algorithm + tests | Done, 16 tests pass; every setting in `secrets.yaml` |
+| Simulator (fake Shelly + fake car, web page) | Done, run end to end |
 | ESP32 firmware | Built from `esp32.yaml`, flashed, on Wi-Fi as `sirwattson.local` |
-| Mac → ESP32 commands (`EsphomeCar`) | Done; ESP32 confirmed receiving "set amps" and "charging on/off" |
-| ESP32 → car | **Next:** pair the ESP32 with the car (`python -m sirwattson.pair`, sitting in the car) |
+| Mac → ESP32 commands (`EsphomeCar`) | Done; ESP32 confirmed receiving "set amps" and "charging on/off". Its Wi-Fi is weak where it sits now (-86 dBm): see Troubleshooting |
+| ESP32 → car | **Next:** pair the ESP32 with the car (`python -m sirwattson.pair`, sitting in the car), then check that the car's reported state confirms each command |
 | Shelly EM | **Waiting for delivery** |
 
 ---
@@ -28,7 +28,7 @@ A **Shelly EM** clamp on the main feed measures what the whole house draws. A sm
                                                                                    v
    +-------------------------------------------------------------------------------+
    |  SirWattson (Python, on a Mac / Raspberry Pi)                                 |
-   |  read Shelly  ->  controller.py (pure decision)  ->  car.py (send command)    |
+   |  read Shelly + car state -> controller.py (pure) -> car.py (send, confirm)    |
    +-------------------------------------------------------------------------------+
                                   | ESPHome native API, encrypted, Wi-Fi
                                   v
@@ -45,29 +45,37 @@ A **Shelly EM** clamp on the main feed measures what the whole house draws. A sm
 | SirWattson (this repo) | Reads the Shelly, decides the amps, tells the ESP32. No Home Assistant. |
 | Simulator | Fake Shelly and fake car, to test everything without hardware. |
 
-**Design rule:** `controller.py` is pure: (time, reading) in, command out. No network, no clock. Everything that touches the outside world sits behind small adapters (`car.py`, `read_shelly`), so the algorithm is tested deterministically and hardware can be swapped without touching it.
+**Design rule:** `controller.py` and `confirm.py` are pure: (time, reading, local hour, car state) in, command out. No network, no clock. Everything that touches the outside world sits behind small adapters (`car.py`, `read_shelly`), so the algorithm is tested deterministically and hardware can be swapped without touching it.
 
 ---
 
 ## Control algorithm
 
-Runs every 5 s with the Shelly reading (`power`, `is_valid`). Limits: contracted power **4,600 W** (20 A × 230 V); working ceiling **4,370 W** (19 A), leaving ~230 W of headroom for loads that switch on between readings.
+Runs every `poll_s` with the Shelly reading (`power`, `voltage`, `is_valid`). The numbers below are the defaults; **every one is a setting in the `sirwattson:` block of `secrets.yaml`**, so another installation only needs that file edited. Ceiling = `contracted_power_w` − `headroom_w` = 4,600 − 230 = **4,370 W**. V is the voltage the Shelly measures (`fallback_voltage_v`, 230 V, if it reports none within 180–260 V).
 
 | Situation | Action |
 |---|---|
-| Charging and power > 4,370 W | Drop ⌈(P − 4,370) / 230⌉ A at once, minimum 5 A |
+| Outside the off-peak window (if set) | Stop, and do not restart until the window opens |
+| Charging and power > 4,370 W | Drop ⌈(P − 4,370) / V⌉ A at once, minimum `min_amps` (5) |
 | Already at 5 A and power > 4,600 W | Stop charging |
-| Charging and power ≤ 4,140 W | Raise 1 A, at most every 15 s, up to 32 A |
-| Between 4,140 and 4,370 W | Hold |
-| Stopped and house + 5 A fits under 4,370 W for 60 s | Restart at 5 A |
-| Believed stopped but power > 4,600 W | Send "stop" (at most every 15 s): the car may be charging without us, e.g. started from the Tesla app |
-| Shelly unreachable or `is_valid: false` | Drop to 5 A; after 30 s, stop |
+| Charging and power + `ramp_up_step_amps` × V ≤ 4,370 W | Raise `ramp_up_step_amps` (1) A, at most every `ramp_up_every_s` (15 s), up to `max_amps` (32) |
+| Otherwise while charging | Hold |
+| Stopped and house + 5 A × V fits under 4,370 W for `resume_after_s` (60 s) | Restart at 5 A |
+| Believed stopped but power > 4,600 W | Send "stop" (at most every 15 s): the car may be charging without us |
+| Shelly unreachable or `is_valid: false` | Drop to 5 A; after `stop_after_invalid_s` (30 s), stop |
+
+**Off-peak window:** `offpeak_start_hour` / `offpeak_end_hour` are whole hours in `timezone` (Europe/Madrid, summer time handled). The window may cross midnight (22 → 7). Unset: charge any time. Weekends are not special-cased.
+
+**Following the car:** SirWattson listens to the car's reported state (the ESP32's `charger` switch and `charging_amps`).
+- After each command it waits `confirm_timeout_s` (15 s) for the car to report it. If not, it re-sends, up to `confirm_max_attempts` (3) sends in total; after that it adopts what the car reports.
+- If the car changes on its own (Tesla app, cable unplugged), the controller adopts that state and adapts. For example, a 32 A charge started from the app is cut to what fits.
+- `last_command` (the firmware's text outcome) is only logged.
 
 ### Fail-safe
 
 - **No trustworthy reading → charge less, then stop.** The controller never keeps commanding power blind.
-- **A failed command to the car is logged and the loop continues.** The next readings still see the real power and issue further (lower or stop) commands.
-- **Known gap:** commands are fire-and-forget. The ESP32 reports the outcome in its `last_command` entity, but SirWattson does not read it yet (see [To do](#to-do)).
+- **A failed or unconfirmed command is logged and re-sent; the loop never stops reading power.** A command gives up after `car_command_timeout_s` (10 s), and the ESP32 connection is kept alive in the background.
+- **A stop from the Tesla app is not permanent:** once power has been low for `resume_after_s`, SirWattson restarts charging (inside the off-peak window).
 
 ---
 
@@ -77,14 +85,17 @@ Runs every 5 s with the Shelly reading (`power`, `is_valid`). Limits: contracted
 SirWattson/
 ├── esp32.yaml            # ESP32 firmware config (pulls yoziru/esphome-tesla-ble, pinned release)
 ├── secrets.example.yaml  # Template for secrets.yaml (gitignored), shared by firmware and Python
-├── sirwattson/
-│   ├── controller.py     # Pure control logic
-│   ├── car.py            # SimHttpCar (simulator) and EsphomeCar (real ESP32)
-│   ├── main.py           # Loop: read Shelly -> decide -> command car
+├── sirwattson/           # What runs for real
+│   ├── controller.py     # Pure control logic + its settings (Config)
+│   ├── confirm.py        # Pure logic: did the car obey the last command?
+│   ├── car.py            # EsphomeCar: the real car through the ESP32
+│   ├── main.py           # Loop: read Shelly -> confirm -> decide -> command car
 │   ├── pair.py           # One-off: pair the ESP32's key with the car
-│   ├── secrets.py        # Reads secrets.yaml
-│   ├── sim.py            # Model 3 + house model
-│   └── sim_server.py     # Fake Shelly Gen1 + fake car HTTP endpoints
+│   └── secrets.py        # Reads secrets.yaml (secrets + the sirwattson: settings block)
+├── simulator/            # Testing without hardware, never needed for real
+│   ├── model.py          # Model 3 + house model
+│   ├── server.py         # Fake Shelly Gen1 + fake car + control page (http://localhost:8081/)
+│   └── car.py            # SimHttpCar: the simulated car, same interface as EsphomeCar
 ├── tests/test_controller.py
 └── pyproject.toml
 ```
@@ -115,35 +126,42 @@ uv sync
 uv run python -m unittest discover -s tests -v
 ```
 
-All 7 tests must pass. Python 3.12–3.14 works.
+All 16 tests must pass. Python 3.12–3.14 works.
 
 ### 3. Try the simulator (no hardware)
 
 Terminal 1, the fake Shelly and car:
 ```bash
-uv run python -m sirwattson.sim_server
+uv run python -m simulator.server
 ```
 
-Terminal 2, the controller:
+Terminal 2, the controller with the simulated car (`--car sim` is only needed until `secrets.yaml` says `car: sim`, step 4):
 ```bash
-uv run python -m sirwattson.main
+uv run python -m sirwattson.main --car sim
 ```
 
 After 60 s charging starts at 5 A, then rises 1 A every 15 s.
 
-Open **http://localhost:8081/** to play the Shelly: type the house power, use the presets, or untick `is_valid` / `online`. The page shows the exact `/emeter/0` JSON SirWattson reads. From a phone on the same Wi-Fi, use `http://<your-Mac's-IP>:8081/` (Mac IP: `ipconfig getifaddr en0`). The same controls as `curl`:
+Open **http://localhost:8081/** (from a phone: `http://<your-Mac's-IP>:8081/`, Mac IP: `ipconfig getifaddr en0`). Two sections:
+- **Shelly (house meter):** house power, presets, voltage, `is_valid`, `online`, and the exact `/emeter/0` JSON SirWattson reads.
+- **Simulated car:** its state; start or stop charging as if from the Tesla app (SirWattson must notice and adapt); untick *reachable* to make the car silently ignore SirWattson's commands and watch the re-sends in the controller log.
+
+The same controls with `curl`:
 
 ```bash
-curl -X POST "localhost:8081/_sim/base?w=3500"      # house power 3500 W
-curl -X POST "localhost:8081/_sim/shelly?valid=0"   # Shelly reports invalid readings
-curl -X POST "localhost:8081/_sim/shelly?online=0"  # Shelly stops answering (HTTP 503)
+curl -X POST "localhost:8081/_sim/base?w=3500"          # house power 3500 W
+curl -X POST "localhost:8081/_sim/shelly?voltage=215"   # measured voltage
+curl -X POST "localhost:8081/_sim/shelly?valid=0"       # Shelly reports invalid readings
+curl -X POST "localhost:8081/_sim/shelly?online=0"      # Shelly stops answering (HTTP 503)
+curl -X POST "localhost:8081/_sim/car_link?reachable=0" # car ignores SirWattson
+curl -X POST "localhost:8081/_sim/car?force=1" -d '{"charging": true, "amps": 32}'  # Tesla app starts 32 A
 ```
 
 Stop any program with `Ctrl + C`.
 
 #### Be the Shelly while driving the real car
 
-Before the Shelly is installed, you can debug with the **real ESP32 and car**: keep `shelly_url` in `secrets.yaml` pointing at the fake Shelly, run `sirwattson.sim_server`, then `sirwattson.main --car esphome`. Nothing commands the simulated car in this mode, so the power you type is exactly what SirWattson reads; the real car's own load is not added, so type the total you want it to see.
+Before the Shelly is installed, you can debug with the **real ESP32 and car**: keep `shelly_url` in `secrets.yaml` pointing at the fake Shelly, set `car: esphome`, run `simulator.server`, then `sirwattson.main`. Nothing commands the simulated car in this mode, so the power you type is exactly what SirWattson reads; the real car's own load is not added, so type the total you want it to see.
 
 ### 4. Fill in the secrets
 
@@ -160,6 +178,7 @@ cp secrets.example.yaml secrets.yaml && open -e secrets.yaml
 | `tesla_vin` | The car's VIN (17 characters, in the Tesla app). |
 | `ble_mac_address` | The car's Bluetooth **MAC address**, `AA:BB:CC:DD:EE:FF` (digits 0–9 and letters A–F only, so `0` is zero, never the letter `O`). See step 6. |
 | `shelly_url` | Where SirWattson reads power: `http://localhost:8081` (fake Shelly) or `http://SHELLY_IP` (real one). |
+| `sirwattson:` block | Every setting: `car: esphome` (real) or `sim`, `esphome_host`, the power limits, amps, steps, timings, off-peak hours and time zone. Each line is commented in the template; a missing line keeps its default; a typo or impossible value stops SirWattson at startup with a clear message. |
 
 `secrets.yaml` is gitignored: it never reaches GitHub.
 
@@ -207,13 +226,13 @@ The key is paired with the **`CHARGING_MANAGER`** role (set in `esp32.yaml`): it
 
 ### 9. Run for real
 
-Set `shelly_url: "http://SHELLY_IP"` in `secrets.yaml`, then:
+In `secrets.yaml` set `shelly_url: "http://SHELLY_IP"` and `car: esphome`, then:
 
 ```bash
-uv run python -m sirwattson.main --car esphome
+uv run python -m sirwattson.main
 ```
 
-The ESP32 address defaults to `sirwattson.local`; the encryption key and Shelly URL are read from `secrets.yaml`. `--shelly-url` overrides it for one run.
+Everything comes from `secrets.yaml`; `--shelly-url` and `--car` override it for one run.
 
 ### Troubleshooting
 
@@ -223,8 +242,8 @@ The ESP32 address defaults to `sirwattson.local`; the encryption key and Shelly 
 | ESP32 log: `wifi … Auth Expired` once, then `Connected` | Normal on some routers: it retries |
 | ESP32 never connects to Wi-Fi | Wrong password, or the network is 5 GHz only |
 | `Invalid encryption key` | `api_encryption_key` differs from the one the ESP32 was flashed with: flash again |
-| `Timeout while resolving IP address for sirwattson.local` | The Mac has not discovered the new name yet; retry, or pass `--esphome-host <IP>` |
-| `car command … failed: TimeoutError()` every time, though `ping sirwattson.local` answers | Weak ESP32 Wi-Fi: small packets pass, large ones are lost (check `ping -s 1400 sirwattson.local`). Move the ESP32 or the router closer; aim for a `WiFi Signal` above about -75 dBm |
+| `Timeout while resolving IP address for sirwattson.local` | The Mac has not discovered the new name yet; retry, or set `esphome_host` to the ESP32's IP |
+| `ESP32 not connected` / `car state unavailable` all the time, though `ping sirwattson.local` answers | Weak ESP32 Wi-Fi: small packets pass, large ones are lost (check `ping -s 1400 sirwattson.local`). Move the ESP32 or the router closer; aim for a `WiFi Signal` above about -75 dBm |
 | ESP32 log: `Command failed: … Connection lost` | Car out of Bluetooth range, asleep, or not paired yet |
 | Pairing: no prompt on the car | Wrong MAC/VIN in `secrets.yaml`, or the NFC card was not tapped right away |
 | Upload ends with `Finishing update failed` | Firmware built for another board; this board needs `tesla-ble-esp32-generic` |
@@ -240,24 +259,25 @@ The ESP32 address defaults to `sirwattson.local`; the encryption key and Shelly 
 4. **ESPHome native API instead of its REST web server.** The native API is encrypted with a key and pushes state changes; REST has no authentication by default and would expose car control to the whole LAN.
 5. **Firmware from `esp32.yaml`, not a local clone.** `esp32.yaml` pulls the yoziru firmware from GitHub at a pinned release. No clone, no Makefile; upgrading is changing `tesla_ble_ref` (and the matching `esphome` version in `pyproject.toml`).
 6. **Least-privileged car key** (`CHARGING_MANAGER`): a leaked key can only affect charging.
-7. **One secrets file** shared by firmware and Python, with the key names the firmware requires.
+7. **One file to configure everything** (`secrets.yaml`): secrets shared by firmware and Python, plus every algorithm setting in its `sirwattson:` block.
 8. **Board:** classic ESP32 → `tesla-ble-esp32-generic`. Alternatives (M5Stack NanoC6, Seeed XIAO ESP32-C6) only matter if Bluetooth range in the garage turns out poor (external antenna).
 9. **Restart threshold:** restart only if *house + 5 A* fits under the ceiling (house < 3,220 W); restarting below 3,910 W, as first proposed, would exceed the contracted power at 5 A.
-10. **Proportional drop:** one step of ⌈(P − 4,370) / 230⌉ A corrects a big spike at once instead of 1 A per cycle.
+10. **Proportional drop:** one step of ⌈(P − 4,370) / V⌉ A corrects a big spike at once instead of 1 A per cycle.
+11. **Confirm with the car's state, not `last_command` text:** the switch/amps states are structured; `last_command` is firmware prose that may change between releases.
 
 ---
 
 ## To do
 
-- Pair with the car and run a real charge (step 7), then with the Shelly (steps 8–9).
-- Read the ESP32's `last_command` / `charger` state so the controller knows when a command did not reach the car.
-- Measure how often the Shelly Gen1 refreshes `power` (`curl` every second); it bounds how short the 5 s cycle can be.
-- Confirm the installation is single-phase 230 V and the clamp model (50 A or 120 A) covers the house's peak.
+- Pair with the car and run a real charge (step 7), then with the Shelly (steps 8–9). Check in the log that the car's reported state confirms each command (`car confirmed …`).
+- Improve the ESP32's Wi-Fi signal (-86 dBm where it sits now).
+- Measure how often the Shelly Gen1 refreshes `power` (`curl` every second); it bounds how short `poll_s` can be.
+- Confirm the clamp model (50 A or 120 A) covers the house's peak. The installation is single-phase.
 - Run as a service (`launchd` on macOS, `systemd` on a Raspberry Pi) so it survives reboots.
 
 ## Possible improvements
 
-Solar-surplus mode · history and charts (CSV/Prometheus/Grafana) · use the Shelly's measured voltage instead of a fixed 230 V · three-phase support (Shelly 3EM) · off-peak scheduling · failure notifications · external-antenna board if BLE range is poor.
+Solar-surplus mode · history and charts (CSV/Prometheus/Grafana) · three-phase support (Shelly 3EM) · weekend / per-day off-peak rules · failure notifications · external-antenna board if BLE range is poor.
 
 ---
 

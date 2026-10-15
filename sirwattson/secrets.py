@@ -8,11 +8,16 @@ import yaml
 SECRETS_PATH = Path(__file__).resolve().parent.parent / "secrets.yaml"
 
 
-def read_secret(name: str, path: Path = SECRETS_PATH) -> str:
+def read_secret(name: str, default: str | None = None, path: Path = SECRETS_PATH) -> str:
+    """Value of `name` in secrets.yaml; `default` when the file or key is missing (if given)."""
     try:
         value = (yaml.safe_load(path.read_text()) or {}).get(name)
+    except FileNotFoundError:
+        value = None
     except (OSError, yaml.YAMLError) as e:
         raise SystemExit(f"cannot read {path}: {e}") from e
-    if not value:
-        raise SystemExit(f"{name} missing in {path} (template: secrets.example.yaml)")
-    return str(value)
+    if value:
+        return str(value)
+    if default is not None:
+        return default
+    raise SystemExit(f"{name} missing in {path} (template: secrets.example.yaml)")

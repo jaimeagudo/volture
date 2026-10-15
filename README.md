@@ -129,17 +129,21 @@ Terminal 2, the controller:
 uv run python -m sirwattson.main
 ```
 
-After 60 s charging starts at 5 A, then rises 1 A every 15 s. From a third terminal:
+After 60 s charging starts at 5 A, then rises 1 A every 15 s.
+
+Open **http://localhost:8081/** to play the Shelly: type the house power, use the presets, or untick `is_valid` / `online`. The page shows the exact `/emeter/0` JSON SirWattson reads. From a phone on the same Wi-Fi, use `http://<your-Mac's-IP>:8081/` (Mac IP: `ipconfig getifaddr en0`). The same controls as `curl`:
 
 ```bash
-curl localhost:8081/_sim/state                    # current state
-curl -X POST "localhost:8081/_sim/base?w=3500"    # an oven turns on
-curl -X POST "localhost:8081/_sim/base?w=650"     # back to normal
-curl -X POST "localhost:8081/_sim/shelly?valid=0" # Shelly reports invalid readings
-curl -X POST "localhost:8081/_sim/shelly?online=0"  # Shelly goes offline
+curl -X POST "localhost:8081/_sim/base?w=3500"      # house power 3500 W
+curl -X POST "localhost:8081/_sim/shelly?valid=0"   # Shelly reports invalid readings
+curl -X POST "localhost:8081/_sim/shelly?online=0"  # Shelly stops answering (HTTP 503)
 ```
 
 Stop any program with `Ctrl + C`.
+
+#### Be the Shelly while driving the real car
+
+Before the Shelly is installed, you can debug with the **real ESP32 and car**: keep `shelly_url` in `secrets.yaml` pointing at the fake Shelly, run `sirwattson.sim_server`, then `sirwattson.main --car esphome`. Nothing commands the simulated car in this mode, so the power you type is exactly what SirWattson reads; the real car's own load is not added, so type the total you want it to see.
 
 ### 4. Fill in the secrets
 
@@ -150,10 +154,12 @@ cp secrets.example.yaml secrets.yaml && open -e secrets.yaml
 | Key | What it is |
 |---|---|
 | `wifi_ssid`, `wifi_password` | Your Wi-Fi. It must offer **2.4 GHz**; the ESP32 cannot use 5 GHz. |
+| `wifi2_ssid`, `wifi2_password` | A second Wi-Fi (e.g. office and garage). The ESP32 joins whichever is in range. Both are required. |
 | `wifi_hotspot_password` | 8+ characters. The ESP32 opens its own Wi-Fi with it if it cannot join yours. |
 | `api_encryption_key` | Encrypts Mac ↔ ESP32 traffic. Generate it with the command in the template. |
 | `tesla_vin` | The car's VIN (17 characters, in the Tesla app). |
 | `ble_mac_address` | The car's Bluetooth **MAC address**, `AA:BB:CC:DD:EE:FF` (digits 0–9 and letters A–F only, so `0` is zero, never the letter `O`). See step 6. |
+| `shelly_url` | Where SirWattson reads power: `http://localhost:8081` (fake Shelly) or `http://SHELLY_IP` (real one). |
 
 `secrets.yaml` is gitignored: it never reaches GitHub.
 
@@ -201,11 +207,13 @@ The key is paired with the **`CHARGING_MANAGER`** role (set in `esp32.yaml`): it
 
 ### 9. Run for real
 
+Set `shelly_url: "http://SHELLY_IP"` in `secrets.yaml`, then:
+
 ```bash
-uv run python -m sirwattson.main --shelly-url http://SHELLY_IP --car esphome
+uv run python -m sirwattson.main --car esphome
 ```
 
-The ESP32 address defaults to `sirwattson.local`; the encryption key is read from `secrets.yaml`.
+The ESP32 address defaults to `sirwattson.local`; the encryption key and Shelly URL are read from `secrets.yaml`. `--shelly-url` overrides it for one run.
 
 ### Troubleshooting
 
@@ -216,6 +224,7 @@ The ESP32 address defaults to `sirwattson.local`; the encryption key is read fro
 | ESP32 never connects to Wi-Fi | Wrong password, or the network is 5 GHz only |
 | `Invalid encryption key` | `api_encryption_key` differs from the one the ESP32 was flashed with: flash again |
 | `Timeout while resolving IP address for sirwattson.local` | The Mac has not discovered the new name yet; retry, or pass `--esphome-host <IP>` |
+| `car command … failed: TimeoutError()` every time, though `ping sirwattson.local` answers | Weak ESP32 Wi-Fi: small packets pass, large ones are lost (check `ping -s 1400 sirwattson.local`). Move the ESP32 or the router closer; aim for a `WiFi Signal` above about -75 dBm |
 | ESP32 log: `Command failed: … Connection lost` | Car out of Bluetooth range, asleep, or not paired yet |
 | Pairing: no prompt on the car | Wrong MAC/VIN in `secrets.yaml`, or the NFC card was not tapped right away |
 | Upload ends with `Finishing update failed` | Firmware built for another board; this board needs `tesla-ble-esp32-generic` |

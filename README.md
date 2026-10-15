@@ -1,10 +1,14 @@
 # volture
 
+![Logo](./volture-logo.svg "Logo")
+
 **Charge a Tesla Model 3 at home as fast as possible without ever tripping the house's 4.6 kW contracted power limit.**
 
 A **Shelly EM** clamp on the main feed measures what the whole house draws. A small Python program reads it every 5 s and decides how many amps (5–32 A) the car may use right now. It sends that number to an **ESP32**, which talks to the car over Bluetooth Low Energy (BLE). When the oven turns on, the car slows down; when it turns off, the car speeds up again.
 
 > **Safety:** this is a load *manager*, not a protection device. It does not replace the utility's power limiter or the breakers. Every failure mode is designed to end in "charge less" or "stop charging" (see [Fail-safe](#fail-safe)).
+
+
 
 ## Status (October 2026)
 
@@ -68,11 +72,11 @@ Runs every `poll_s` with the Shelly reading (`power`, `voltage`, `is_valid`). Th
 
 **The Tesla app has priority.** Volture listens to the car's reported state through the ESP32: charging on/off, amps, cable connected, battery % and charge limit %. A change the car reports that is *not* what Volture asked for came from outside (the Tesla app, or the car itself), and Volture follows it:
 
-| Outside change | What Volture does |
-| --- | --- |
-| Charging stopped (app, or the car reached its charge limit) | Stays stopped: never restarts on its own |
-| Charging started, or amps changed, from the app | Follows it; never ramps above those amps; ignores the off-peak window |
-| Cable unplugged | Clears the above: the next session is Volture's again |
+| Outside change                                              | What Volture does                                                     |
+| ----------------------------------------------------------- | --------------------------------------------------------------------- |
+| Charging stopped (app, or the car reached its charge limit) | Stays stopped: never restarts on its own                              |
+| Charging started, or amps changed, from the app             | Follows it; never ramps above those amps; ignores the off-peak window |
+| Cable unplugged                                             | Clears the above: the next session is Volture's again                 |
 
 The house's contracted power still wins over the app: a 32 A charge started from the app is cut to what fits under 4,600 W.
 

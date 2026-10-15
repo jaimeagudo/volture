@@ -73,6 +73,20 @@ class Controller:
         self.last_change = -math.inf
         self.low_since: Optional[float] = None
         self.invalid_since: Optional[float] = None
+        # The Tesla app has priority. user_paused: stopped from the app, never restart on our own.
+        # user_amps: started / set from the app: never ramp above it, ignore the off-peak window.
+        self.user_paused = False
+        self.user_amps: Optional[int] = None
+
+    def follow_user(self, charging: bool, amps: int) -> None:
+        """A change made outside Volture (Tesla app, the car itself): follow it from now on."""
+        self.adopt(charging, amps)
+        self.user_paused = not charging
+        self.user_amps = amps if charging else None
+
+    def clear_user(self) -> None:
+        """Cable unplugged: the next charging session is Volture's again."""
+        self.user_paused, self.user_amps = False, None
 
     def adopt(self, charging: bool, amps: int) -> None:
         """Align the controller's belief with the car's reported state (see confirm.py)."""
@@ -91,10 +105,12 @@ class Controller:
         self.last_change = now
         return Command(False, 0)
 
-    def tick(self, now: float, reading: Optional[Reading],
-             local_hour: Optional[int] = None) -> Optional[Command]:
+    def tick(self, now: float, reading: Optional[Reading], local_hour: Optional[int] = None,
+             car_can_charge: bool = True) -> Optional[Command]:
+        """car_can_charge: False when the car is unplugged or at its battery charge limit."""
         c = self.cfg
-        allowed = in_offpeak(c, local_hour)
+        allowed = self.user_amps is not None or in_offpeak(c, local_hour)
+        max_amps = c.max_amps if self.user_amps is None else min(c.max_amps, self.user_amps)
         if reading is None or not reading.valid:
             self.low_since = None
             if self.invalid_since is None:
@@ -120,8 +136,10 @@ class Controller:
                 if now - self.last_change >= c.ramp_up_every_s:
                     return self._stop(now)
                 return None
-            # Only restart inside the off-peak window and if house + minimum charge fits the ceiling.
-            if allowed and p + c.min_amps * volts <= c.working_limit_w:
+            # Restart only if not stopped from the app, the car can take charge, inside the
+            # off-peak window, and house + minimum charge fits the ceiling.
+            if (not self.user_paused and car_can_charge and allowed
+                    and p + c.min_amps * volts <= c.working_limit_w):
                 if self.low_since is None:
                     self.low_since = now
                 if now - self.low_since >= c.resume_after_s:
@@ -143,7 +161,7 @@ class Controller:
                 target = c.min_amps
             return self._set(target, now) if target != self.amps else None
 
-        step = min(c.ramp_up_step_amps, c.max_amps - self.amps)
+        step = min(c.ramp_up_step_amps, max_amps - self.amps)
         if (step > 0
                 and p + step * volts <= c.working_limit_w
                 and now - self.last_change >= c.ramp_up_every_s):

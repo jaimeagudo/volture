@@ -8,7 +8,8 @@ GET  /shelly, /emeter/0          -> same JSON fields as a real Shelly EM Gen1
 POST /_sim/car   {charging,amps} -> what the ESP32 would do (?force=1: act as the Tesla app)
 POST /_sim/base?w=3500           -> set house base load (W)
 POST /_sim/shelly?valid=0|1&online=0|1&voltage=225
-POST /_sim/car_link?reachable=0|1 -> 0: the car silently ignores commands (out of BLE range)
+POST /_sim/car_link?reachable=0|1&plugged=0|1&battery=60&limit=80
+                                 -> reachable=0: the car silently ignores commands (out of BLE range)
 GET  /_sim/state
 """
 from __future__ import annotations
@@ -28,7 +29,7 @@ T0 = time.monotonic()
 CONTROL_PAGE = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>volture simulator</title>
 <style>body{font:18px system-ui;margin:16px;max-width:440px}section{border:1px solid #ccc;border-radius:8px;padding:4px 12px;margin:0 0 16px}
-h2{font-size:20px;margin:8px 0}input[type=number]{font-size:22px;width:7ch}
+h2{font-size:20px;margin:8px 0}input[type=number]{font-size:22px;width:7ch}#b,#l{width:3.5ch}
 button{font-size:18px;padding:8px 14px;margin:4px 4px 0 0}pre{background:#eee;padding:8px;overflow-x:auto}</style>
 </head><body><h1>volture simulator</h1>
 <section><h2>Shelly (house meter)</h2>
@@ -42,7 +43,10 @@ button{font-size:18px;padding:8px 14px;margin:4px 4px 0 0}pre{background:#eee;pa
 <p>Act as the Tesla app:</p>
 <form id="fa"><label>Amps <input type="number" id="a" value="32" min="1" max="48"></label> <button>Start charging</button></form>
 <p><button id="stop">Stop charging</button></p>
-<p><label title="Untick: the car silently ignores volture, like out of Bluetooth range"><input type="checkbox" id="reachable"> reachable by volture</label></p>
+<p><label title="Untick: the car silently ignores volture, like out of Bluetooth range"><input type="checkbox" id="reachable"> reachable by volture</label>
+<label><input type="checkbox" id="plugged"> plugged in</label></p>
+<form id="fb"><label>Battery % <input type="number" id="b" min="0" max="100"></label>
+<label>Limit % <input type="number" id="l" min="50" max="100"></label> <button>Set</button></form>
 <p><small>Adds load to the house only with <code>car: sim</code>.</small></p></section>
 <script>
 const post = (url, body) => fetch(url, {method: "POST", headers: {"content-type": "application/json"},
@@ -57,14 +61,22 @@ for (const name of ["valid", "online"]) {
 }
 document.getElementById("fa").onsubmit = (e) => { e.preventDefault(); post("/_sim/car?force=1", {charging: true, amps: val("a")}); };
 document.getElementById("stop").onclick = () => post("/_sim/car?force=1", {charging: false, amps: 0});
-document.getElementById("reachable").onchange = (e) => post(`/_sim/car_link?reachable=${e.target.checked ? 1 : 0}`);
+for (const name of ["reachable", "plugged"]) {
+  document.getElementById(name).onchange = (e) => post(`/_sim/car_link?${name}=${e.target.checked ? 1 : 0}`);
+}
+document.getElementById("fb").onsubmit = (e) => { e.preventDefault(); post(`/_sim/car_link?battery=${val("b")}&limit=${val("l")}`); };
 async function refresh() {
   try {
     const st = await (await fetch("/_sim/state")).json();
     document.getElementById("valid").checked = st.shelly_valid;
     document.getElementById("online").checked = st.shelly_online;
     document.getElementById("reachable").checked = st.car_reachable;
-    document.getElementById("car").textContent = st.car_charging ? `charging at ${st.car_amps} A` : "not charging";
+    document.getElementById("plugged").checked = st.car_plugged;
+    const why = !st.car_plugged ? " (unplugged)" : st.car_battery_pct >= st.car_limit_pct ? " (at charge limit)" : "";
+    document.getElementById("car").textContent = st.car_charging ? `charging at ${st.car_amps} A` : "not charging" + why;
+    if (!["b", "l"].includes(document.activeElement.id)) {
+      document.getElementById("b").value = st.car_battery_pct; document.getElementById("l").value = st.car_limit_pct;
+    }
     if (document.activeElement.id !== "w") { document.getElementById("w").value = st.base_w; }
     if (document.activeElement.id !== "v") { document.getElementById("v").value = st.voltage_v; }
     const em = await fetch("/emeter/0");
@@ -127,15 +139,30 @@ def make_app(world: World) -> web.Application:
                                   "voltage_v": world.voltage_v})
 
     async def car_link(request):
-        world.car.reachable = request.query.get("reachable", "1") == "1"
-        return web.json_response({"car_reachable": world.car.reachable})
+        q, car = request.query, world.car
+        try:
+            if "reachable" in q:
+                car.reachable = q["reachable"] == "1"
+            if "plugged" in q:
+                car.plugged = q["plugged"] == "1"
+            if "battery" in q:
+                car.battery_pct = float(q["battery"])
+            if "limit" in q:
+                car.limit_pct = float(q["limit"])
+        except ValueError:
+            raise web.HTTPBadRequest(text="expected numbers for battery / limit")
+        car.settle()
+        return web.json_response({"car_reachable": car.reachable, "car_plugged": car.plugged,
+                                  "car_battery_pct": car.battery_pct, "car_limit_pct": car.limit_pct})
 
     async def state(_):
         total = world.total_w(now())
         return web.json_response({"base_w": world.base_w, "car_charging": world.car.charging,
                                   "car_amps": world.car.amps, "total_w": total,
                                   "shelly_valid": world.shelly_valid, "shelly_online": world.shelly_online,
-                                  "voltage_v": world.voltage_v, "car_reachable": world.car.reachable})
+                                  "voltage_v": world.voltage_v, "car_reachable": world.car.reachable,
+                                  "car_plugged": world.car.plugged, "car_battery_pct": world.car.battery_pct,
+                                  "car_limit_pct": world.car.limit_pct})
 
     async def page(_):
         return web.Response(text=CONTROL_PAGE, content_type="text/html")

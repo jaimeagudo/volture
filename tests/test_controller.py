@@ -1,7 +1,7 @@
 import unittest
 from dataclasses import replace
 
-from volture.confirm import Action, CarState, Pending, reconcile
+from volture.confirm import Action, CarState, Pending, can_charge, external_change, reconcile
 from volture.controller import (
     Command,
     Config,
@@ -169,6 +169,75 @@ class ConfirmTests(unittest.TestCase):
     def test_gives_up_without_state(self):
         action, left = self.reconcile(replace(self.pending, attempts=3), None, 20, 15, 3)
         self.assertEqual((action, left), (self.Action.UNKNOWN, None))
+
+
+
+class TeslaAppPriorityTests(unittest.TestCase):
+    def test_stop_from_app_is_never_overridden(self):
+        h = Harness(650)
+        h.run(200)
+        self.assertTrue(h.car.charging)
+        h.ctrl.follow_user(False, 0)               # stopped from the Tesla app
+        h.car.force(Command(False, 0))
+        h.run(600)
+        self.assertFalse(h.car.charging)
+
+    def test_app_amps_are_a_ceiling(self):
+        h = Harness(650)
+        h.ctrl.follow_user(True, 10)               # started at 10 A from the app
+        h.car.force(Command(True, 10))
+        h.run(400)
+        self.assertEqual(h.car.amps, 10)           # room for 16 A, but the app said 10
+
+    def test_power_limit_beats_the_app(self):
+        h = Harness(650)
+        h.ctrl.follow_user(True, 32)
+        h.car.force(Command(True, 32))             # 650 + 32*230 = 8010 W
+        h.run(30)
+        self.assertLessEqual(h.total(), 4370)
+
+    def test_app_start_ignores_offpeak_window(self):
+        h = Harness(650, Config(offpeak_start_hour=0, offpeak_end_hour=8))
+        h.local_hour = 12
+        h.ctrl.follow_user(True, 10)
+        h.car.force(Command(True, 10))
+        h.run(100)
+        self.assertTrue(h.car.charging)
+
+    def test_unplug_hands_control_back(self):
+        ctrl = Controller()
+        ctrl.follow_user(False, 0)
+        ctrl.clear_user()
+        ctrl.tick(0, Reading(650))
+        self.assertEqual(ctrl.tick(60, Reading(650)), Command(True, 5))
+
+    def test_no_start_when_car_cannot_charge(self):
+        ctrl = Controller()
+        ctrl.tick(0, Reading(650), car_can_charge=False)
+        self.assertIsNone(ctrl.tick(600, Reading(650), car_can_charge=False))
+
+    def test_can_charge(self):
+        self.assertFalse(can_charge(CarState(False, 0, plugged=False)))
+        self.assertFalse(can_charge(CarState(False, 0, True, battery_pct=80, limit_pct=80)))
+        self.assertTrue(can_charge(CarState(False, 0, True, battery_pct=79, limit_pct=80)))
+        self.assertTrue(can_charge(None))          # unknown never blocks: the car refuses itself
+
+    def test_external_change(self):
+        stopped, at10, at16 = CarState(False, 0), CarState(True, 10), CarState(True, 16)
+        ours = Pending(Command(True, 16), 0)
+        self.assertFalse(external_change(ours, at10, at16))   # became what Volture asked
+        self.assertFalse(external_change(ours, at10, at10))   # not applied yet: no change
+        self.assertTrue(external_change(ours, at10, stopped))  # stopped from the app meanwhile
+        self.assertTrue(external_change(None, stopped, at10))  # started from the app
+        self.assertFalse(external_change(None, None, at10))    # first report after startup
+        self.assertFalse(external_change(None, CarState(True, 10, battery_pct=50),
+                                         CarState(True, 10, battery_pct=51)))  # battery % only
+
+    def test_sim_car_refuses_beyond_its_limit(self):
+        w = World()
+        w.car.battery_pct, w.car.limit_pct = 80, 80
+        w.car.force(Command(True, 16))
+        self.assertFalse(w.car.charging)
 
 
 if __name__ == "__main__":

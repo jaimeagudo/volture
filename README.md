@@ -2,6 +2,11 @@
 
 ![Logo](./volture-logo.svg "Logo")
 
+http://volture.local/
+
+https://honestmarsh2481.grafana.net/d/volture/
+
+
 **Charge a Tesla Model 3 at home as fast as possible without ever tripping the house's 4.6 kW contracted power limit.**
 
 A **Shelly EM** clamp on the main feed measures what the whole house draws. Every 5 s, Volture reads it and decides how many amps (5–32 A) the car may use right now. An **ESP32** passes that to the car over Bluetooth Low Energy (BLE). When the oven turns on, the car slows down; when it turns off, the car speeds up again.

@@ -59,10 +59,14 @@ globals:
   - id: shelly_body  # last /emeter/0 reply; empty = no reading this cycle
     type: std::string
 
+# The only HTTP the ESP32 does: plain HTTP to the Shelly on the LAN. No internet, no cloud push
+# (decided 2026-10-15, options in https://github.com/jaimeagudo/volture/issues/12).
 http_request:
   timeout: 2s        # the Shelly is on the LAN: a slow reply is treated as no reading
-  verify_ssl: true   # HTTPS (the "HTTPS test" button) checks certificates with ESP-IDF's bundle
+  verify_ssl: false  # no HTTPS is used; true would only add the certificate bundle to flash
 
+# ALWAYS ON (owner's requirement): live values + JSON stream (/events) at http://volture.local.
+# Never remove or make it optional.
 web_server:
   port: 80
   version: 3
@@ -183,29 +187,3 @@ interval:
             then:
               - lambda: id(shelly_body) = std::string();
               - script.execute: volture_cycle
-
-button:
-  # Measures what HTTPS costs in memory while Bluetooth is connected to the car (option B: pushing
-  # data to a cloud service). Sends nothing but an empty GET to Google; read the result in the log.
-  - platform: template
-    name: HTTPS test
-    icon: mdi:lock-check
-    on_press:
-      - lambda: |-
-          ESP_LOGI("volture", "https test: before free=%u largest=%u min_ever=%u",
-                   heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
-                   heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
-      - http_request.get:
-          url: https://www.google.com/generate_204
-          on_response:
-            then:
-              - lambda: |-
-                  ESP_LOGI("volture", "https test: status=%d after free=%u largest=%u min_ever=%u",
-                           response->status_code, heap_caps_get_free_size(MALLOC_CAP_8BIT),
-                           heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
-                           heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
-          on_error:
-            then:
-              - lambda: |-
-                  ESP_LOGW("volture", "https test: failed, free=%u min_ever=%u",
-                           heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));

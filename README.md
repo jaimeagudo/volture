@@ -4,7 +4,9 @@
 
 **Charge a Tesla Model 3 at home as fast as possible without ever tripping the house's 4.6 kW contracted power limit.**
 
-A **Shelly EM** clamp on the main feed measures what the whole house draws. A small Python program reads it every 5 s and decides how many amps (5–32 A) the car may use right now. It sends that number to an **ESP32**, which talks to the car over Bluetooth Low Energy (BLE). When the oven turns on, the car slows down; when it turns off, the car speeds up again.
+A **Shelly EM** clamp on the main feed measures what the whole house draws. Every 5 s, Volture reads it and decides how many amps (5–32 A) the car may use right now. An **ESP32** passes that to the car over Bluetooth Low Energy (BLE). When the oven turns on, the car slows down; when it turns off, the car speeds up again.
+
+**Target:** the ESP32 does everything on its own, 24/7: read the Shelly, decide, command the car. **Today** the decision loop still runs in Python on a Mac; the C++ version for the ESP32 is written and tested (`esp32/controller.h`) but not yet running on the device.
 
 > **Safety:** this is a load *manager*, not a protection device. It does not replace the utility's power limiter or the breakers. Every failure mode is designed to end in "charge less" or "stop charging" (see [Fail-safe](#fail-safe)).
 
@@ -15,7 +17,7 @@ A **Shelly EM** clamp on the main feed measures what the whole house draws. A sm
 | Piece                                        | State                                                                                                                                                |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Control algorithm + tests                    | Done in Python and in C++ (`esp32/controller.h`); the same 21 scenarios pass on both; every setting in `secrets.yaml`                               |
-| Control loop running on the ESP32 itself     | **Next:** read the Shelly and drive the car from the ESP32, so no other machine is needed                                                           |
+| Control loop running on the ESP32 itself     | **Planned:** read the Shelly and drive the car from the ESP32, so no other machine is needed. Until then, run `volture.main` on a Mac              |
 | Simulator (fake Shelly + fake car, web page) | Done, run end to end                                                                                                                                 |
 | ESP32 firmware                               | Built from `esp32.yaml`, flashed, on Wi-Fi as `volture.local`                                                                                        |
 | Mac → ESP32 commands (`EsphomeCar`)          | Done; ESP32 confirmed receiving "set amps" and "charging on/off"                                                                                     |
@@ -26,13 +28,15 @@ A **Shelly EM** clamp on the main feed measures what the whole house draws. A sm
 
 ## How it works
 
+Today (the Mac's role moves into the ESP32 next):
+
 ```text
           main feed (230 V, single phase)
                     |
             [clamp] --> Shelly EM (Gen1) ---Wi-Fi, HTTP GET /emeter/0 every 5 s---+
                                                                                    v
    +-------------------------------------------------------------------------------+
-   |  volture (Python, on a Mac / Raspberry Pi)                                 |
+   |  volture (Python, on a Mac)                                                   |
    |  read Shelly + car state -> controller.py (pure) -> car.py (send, confirm)    |
    +-------------------------------------------------------------------------------+
                                   | ESPHome native API, encrypted, Wi-Fi
@@ -48,9 +52,10 @@ A **Shelly EM** clamp on the main feed measures what the whole house draws. A sm
 | Shelly EM Gen1 + clamp                                             | Measures total house power, car included (the clamp is on the main feed).                  |
 | ESP32 (Elegoo, classic ESP32-D0WD-V3, 4 MB flash, CP2102 USB chip) | Runs third-party firmware that speaks Tesla's BLE protocol: set amps, start/stop charging. |
 | volture (this repo)                                                | Reads the Shelly, decides the amps, tells the ESP32. No Home Assistant.                    |
+| `esp32/controller.h`                                               | The same decision logic in C++, to run on the ESP32 itself (planned).                      |
 | Simulator                                                          | Fake Shelly and fake car, to test everything without hardware.                             |
 
-**Design rule:** `controller.py` and `confirm.py` are pure: (time, reading, car state) in, command out. No network, no clock. Everything that touches the outside world sits behind small adapters (`car.py`, `read_shelly`), so the algorithm is tested deterministically and hardware can be swapped without touching it.
+**Design rule:** `controller.py`, `confirm.py` and their C++ copy `esp32/controller.h` are pure: (time, reading, car state) in, command out. No network, no clock. Everything that touches the outside world sits behind small adapters (`car.py`, `read_shelly`), so the algorithm is tested deterministically and hardware can be swapped without touching it.
 
 ---
 
@@ -276,7 +281,7 @@ Everything comes from `secrets.yaml`; `--shelly-url` and `--car` override it for
 
 1. **Shelly EM Gen1 (€37) over Gen3 (€60).** Power + `is_valid` over a plain HTTP GET is all that's needed; on-device history is irrelevant because decisions happen every few seconds. Accepted risk: Gen1 firmware is frozen at 1.14.0 (2023) and only gets fixes.
 2. **The Shelly cannot replace the ESP32.** Shelly scripts can only scan BLE adverts (no GATT connection) and have ~25 KB of memory; Tesla's BLE protocol needs elliptic-curve crypto and protobuf.
-3. **Everything runs on the ESP32, 24/7, no other machine and no Home Assistant** (decided 2026-10-15; migration in progress). The control algorithm is ported to C++ on the ESP32. The Python version stays for debugging on a Mac, and both implementations must pass the same test scenarios so they cannot drift.
+3. **Everything runs on the ESP32, 24/7, no other machine and no Home Assistant** (decided 2026-10-15). The control algorithm is ported to C++ (`esp32/controller.h`, tested); running it on the ESP32 is the next step, and until then the Python loop runs on a Mac. The Python version stays for debugging on a Mac, and both implementations must pass the same test scenarios so they cannot drift.
 4. **ESPHome native API instead of its REST web server.** The native API is encrypted with a key and pushes state changes; REST has no authentication by default and would expose car control to the whole LAN.
 5. **Firmware from `esp32.yaml`, not a local clone.** `esp32.yaml` pulls the yoziru firmware from GitHub at a pinned release. No clone, no Makefile; upgrading is changing `tesla_ble_ref` (and the matching `esphome` version in `pyproject.toml`).
 6. **Least-privileged car key** (`CHARGING_MANAGER`): a leaked key can only affect charging.

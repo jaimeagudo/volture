@@ -299,27 +299,33 @@ For tools, the same data is plain JSON: `GET http://volture.local/events` stream
 
 The ESP32 can push everything it sees to a free Grafana Cloud account, for charts and history on any phone. It sends one line per 5-second cycle in which something changed (always at least one a minute), batched once a minute. Off until you set it up and switch it on; switch "Grafana push" off on the web page at any time to stop all internet traffic.
 
-**1. Account and credentials** (once, on grafana.com):
-1. Create a free account at [grafana.com](https://grafana.com); it creates a *stack* (your Grafana, e.g. `https://yourname.grafana.net`).
-2. In the Cloud Portal (grafana.com → *My Account*), on your stack, open the **InfluxDB** card → *Configure* (or the **Prometheus** card → *Details*). Note:
-   - the **URL** host, e.g. `https://influx-prod-24-prod-eu-west-2.grafana.net` (or the Prometheus one, e.g. `https://prometheus-prod-24-prod-eu-west-2.grafana.net`: both accept the push);
-   - the **user / instance ID**, a number.
-3. Create a token: Cloud Portal → *Security* → *Access Policies* → *Create access policy*, realm = your stack, scope **metrics: write** only → *Create* → *Add token* → copy it (shown once).
+**1. Get the URL and instance ID** (checked in a real account, 2026-10-15). Ignore Grafana's "Add new connection" / "How do you want to connect your Prometheus data" wizards and the **InfluxDB integration** (*Connections → InfluxDB*; it monitors an InfluxDB database server through Grafana Alloy): the ESP32 needs none of them, only the push address, instance ID and token below.
+1. Create a free account at [grafana.com](https://grafana.com). It creates a *stack*, e.g. `yourname`.
+2. On grafana.com click **My account** (top right). You land on the *Grafana Cloud Portal*.
+3. In the left menu, under **GRAFANA CLOUD**, click your stack's name.
+4. On the stack page, find the card **InfluxDB Connectivity** ("Connect using InfluxDB protocol") and click **Configure**. The page *"…-prom - InfluxDB connection details"* opens (URL: `https://grafana.com/orgs/<org>/hosted-metrics/<instance ID>/influxdb-info`). It shows:
+   - **Write Endpoint**, e.g. `https://prometheus-prod-58-prod-eu-central-0.grafana.net`;
+   - **Username / Instance ID**, a number, e.g. `3678527`.
 
-**2. Put them in `secrets.yaml`:**
+**2. Create the token** on that same page:
+1. Under **Password / API Token**, click **Generate now**. A *Create an API token* dialog opens.
+2. *Access policy name* is filled in for you; type any **Token name** (e.g. `volture-esp32`); leave **Expiration** at *No expiry* (or pick a date, and remember to renew it); the scopes are predefined and include `metrics:write`.
+3. Click **Create token** and copy it right away: it is shown only once.
+
+**3. Put them in `secrets.yaml`**, adding `/api/v1/push/influx/write` to the Write Endpoint:
 ```yaml
-grafana_url: "https://<host from step 2>/api/v1/push/influx/write"
-grafana_user: "<instance ID>"
-grafana_token: "<token>"
+grafana_url: "https://prometheus-prod-58-prod-eu-central-0.grafana.net/api/v1/push/influx/write"
+grafana_user: "3678527"
+grafana_token: "<the token>"
 ```
 
-**3. Flash and switch on:**
+**4. Flash and switch on:**
 ```bash
 uv run esphome run esp32.yaml --device volture.local
 ```
-Open `http://volture.local`, switch **Grafana push** on. Within 2 minutes **Grafana push status** shows `ok 204, … B`. `error 401`: wrong user or token; `error 404`: the URL lacks `/api/v1/push/influx/write`; `error: no answer`: no internet, or Grafana changed certificate authority (replace `esp32/grafana_ca.pem`).
+Open `http://volture.local`, switch **Grafana push** on. Within 2 minutes **Grafana push status** shows `ok 204, … B`. `error 401`: wrong instance ID or token; `error 404`: the URL lacks `/api/v1/push/influx/write`; `error: no answer`: no internet, or Grafana changed certificate authority (replace `esp32/grafana_ca.pem`).
 
-**4. See the data:** in your Grafana, *Explore* → data source `grafanacloud-<stack>-prom` → type `volture_`. Metrics (Prometheus names = `volture_` + field):
+**5. See the data:** open your Grafana (`https://<stack>.grafana.net`) → menu **Connections** → **Data sources** → on `grafanacloud-<stack>-prom` (Prometheus, marked *default*) click **Explore** → in the metric box type `volture_`. The InfluxDB lines arrive as Prometheus metrics, so they are only queryable through that Prometheus data source. Metrics (Prometheus names = `volture_` + field):
 
 | Metric | Meaning |
 | ------ | ------- |

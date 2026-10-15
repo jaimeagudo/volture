@@ -14,10 +14,11 @@ A **Shelly EM** clamp on the main feed measures what the whole house draws. A sm
 
 | Piece                                        | State                                                                                                                                                |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Control algorithm + tests                    | Done, 25 tests pass; every setting in `secrets.yaml`                                                                                                 |
+| Control algorithm + tests                    | Done in Python and in C++ (`esp32/controller.h`); the same 21 scenarios pass on both; every setting in `secrets.yaml`                               |
+| Control loop running on the ESP32 itself     | **Next:** read the Shelly and drive the car from the ESP32, so no other machine is needed                                                           |
 | Simulator (fake Shelly + fake car, web page) | Done, run end to end                                                                                                                                 |
 | ESP32 firmware                               | Built from `esp32.yaml`, flashed, on Wi-Fi as `volture.local`                                                                                        |
-| Mac → ESP32 commands (`EsphomeCar`)          | Done; ESP32 confirmed receiving "set amps" and "charging on/off". Its Wi-Fi is weak where it sits now (-86 dBm): see Troubleshooting                 |
+| Mac → ESP32 commands (`EsphomeCar`)          | Done; ESP32 confirmed receiving "set amps" and "charging on/off"                                                                                     |
 | ESP32 → car                                  | **Next:** pair the ESP32 with the car (`python -m volture.pair`, sitting in the car), then check that the car's reported state confirms each command |
 | Shelly EM                                    | **Waiting for delivery**                                                                                                                             |
 
@@ -49,7 +50,7 @@ A **Shelly EM** clamp on the main feed measures what the whole house draws. A sm
 | volture (this repo)                                                | Reads the Shelly, decides the amps, tells the ESP32. No Home Assistant.                    |
 | Simulator                                                          | Fake Shelly and fake car, to test everything without hardware.                             |
 
-**Design rule:** `controller.py` and `confirm.py` are pure: (time, reading, local hour, car state) in, command out. No network, no clock. Everything that touches the outside world sits behind small adapters (`car.py`, `read_shelly`), so the algorithm is tested deterministically and hardware can be swapped without touching it.
+**Design rule:** `controller.py` and `confirm.py` are pure: (time, reading, car state) in, command out. No network, no clock. Everything that touches the outside world sits behind small adapters (`car.py`, `read_shelly`), so the algorithm is tested deterministically and hardware can be swapped without touching it.
 
 ---
 
@@ -108,7 +109,11 @@ volture/
 │   ├── model.py          # Model 3 + house model
 │   ├── server.py         # Fake Shelly Gen1 + fake car + control page (http://localhost:8081/)
 │   └── car.py            # SimHttpCar: the simulated car, same interface as EsphomeCar
-├── tests/test_controller.py
+├── esp32/controller.h    # C++ port of controller.py + confirm.py, for the ESP32 (standard library only)
+├── tests/
+│   ├── test_controller.py  # Every scenario, run against Python and against the C++ port
+│   ├── conftest.py         # The two backends; compiles the C++ test driver into .tmp/
+│   └── cpp/controller_cli.cpp  # Test driver: controller.h behind a stdin/stdout line protocol
 └── pyproject.toml
 ```
 
@@ -135,10 +140,12 @@ brew install git uv
 git clone https://github.com/jaimeagudo/volture.git ~/github/volture
 cd ~/github/volture
 uv sync
-uv run python -m unittest discover -s tests -v
+uv run pytest -v
 ```
 
-All 25 tests must pass. Python 3.12–3.14 works.
+Every scenario runs twice: `[python]` and `[cpp]`. All must pass. Python 3.12–3.14 works. The `[cpp]` runs need a C++17 compiler (`xcode-select --install` on macOS); without one they are skipped.
+
+**Changing the algorithm:** change `volture/controller.py` (or `confirm.py`) **and** `esp32/controller.h` the same way. If they differ, the `[cpp]` or `[python]` variant of some test fails.
 
 ### 3. Try the simulator (no hardware)
 
@@ -285,10 +292,9 @@ Everything comes from `secrets.yaml`; `--shelly-url` and `--car` override it for
 ## To do
 
 - Pair with the car and run a real charge (step 7), then with the Shelly (steps 8–9). Check in the log that the car's reported state confirms each command (`car confirmed …`).
-- Improve the ESP32's Wi-Fi signal (-86 dBm where it sits now).
 - Measure how often the Shelly Gen1 refreshes `power` (`curl` every second); it bounds how short `poll_s` can be.
 - Confirm the clamp model (50 A or 120 A) covers the house's peak. The installation is single-phase.
-- Run as a service (`launchd` on macOS, `systemd` on a Raspberry Pi) so it survives reboots.
+- Run the control loop on the ESP32 itself (decision 3): poll the Shelly over Wi-Fi, call `esp32/controller.h`, drive the car, publish the state; then a password-protected settings page on the ESP32.
 
 ## Possible improvements
 

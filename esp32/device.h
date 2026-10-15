@@ -3,11 +3,15 @@
 // The control cycle itself is volture::Loop (controller.h); esp32.yaml calls it every poll.
 #pragma once
 
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
 #include <optional>
 #include <string>
 
 #include "esp_timer.h"
 #include "esphome/components/json/json_util.h"
+#include "esphome/core/alloc_helpers.h"
 #include "esphome/core/application.h"
 #include "controller.h"
 
@@ -105,6 +109,149 @@ inline bool send(const volture::Command &cmd) {
     }
   }
   return true;
+}
+
+// ---- Grafana push (issue #12): one line per cycle in which something changed ----
+// Lines are buffered and sent once a minute, each with its own timestamp (from SNTP, used only
+// here, never by the control logic). Grafana Cloud ignores text fields, so texts travel as labels
+// on a second line (metric volture_state_value). Health values (heap, signals) ride along but do
+// not count as a change on their own.
+
+struct Sample {
+  std::optional<volture::Reading> reading;
+  std::optional<volture::CarState> car;
+  float car_current_a = NAN;  // what the car actually draws ("Charger Current")
+  float car_power_kw = NAN;   // "Charger Power"
+  int amps = 0;               // Volture's decided amps (0: stopped)
+  bool control = false;
+  std::optional<volture::Command> last_sent;  // last command sent to the car
+  int attempts = 0;                           // sends of the pending command (0: none pending)
+  std::string reason, event, answer, status;  // decision, outcome, firmware's last_command, charging text
+};
+
+// Same content, health values aside: nothing worth a new line.
+inline bool same(const Sample &a, const Sample &b) {
+  auto power = [](const Sample &s) { return s.reading && s.reading->valid ? s.reading->power_w : -1.0; };
+  auto car_key = [](const Sample &s) {
+    return s.car ? (s.car->charging ? 1000 : 0) + s.car->amps + (s.car->plugged.value_or(false) ? 10000 : 0) : -1;
+  };
+  auto sent_key = [](const Sample &s) { return s.last_sent ? (s.last_sent->charging ? 1000 : 0) + s.last_sent->amps : -1; };
+  return power(a) == power(b) && car_key(a) == car_key(b) && a.amps == b.amps && a.control == b.control &&
+         sent_key(a) == sent_key(b) && a.attempts == b.attempts && a.reason == b.reason && a.event == b.event &&
+         a.answer == b.answer && a.status == b.status &&
+         std::isnan(a.car_current_a) == std::isnan(b.car_current_a) &&
+         (std::isnan(a.car_current_a) || a.car_current_a == b.car_current_a);
+}
+
+// Line-protocol tag value: spaces, commas and '=' must be escaped; empty -> "none".
+inline std::string tag(const std::string &text) {
+  if (text.empty()) {
+    return "none";
+  }
+  std::string out;
+  for (char c : text) {
+    if (c == ' ' || c == ',' || c == '=') {
+      out += '\\';
+    }
+    out += c;
+  }
+  return out;
+}
+
+// Two lines for one sample at unix time `ns` (nanoseconds). Missing values are left out.
+inline std::string sample_lines(const Sample &s, unsigned heap_free, unsigned heap_block, float wifi_dbm,
+                                float ble_dbm, long long ns) {
+  std::string line = "volture amps=" + std::to_string(s.amps) + ",control=" + (s.control ? "1" : "0");
+  char buf[64];
+  auto field = [&line, &buf](const char *name, double value, const char *format) {
+    if (!std::isnan(value)) {
+      std::snprintf(buf, sizeof(buf), format, value);
+      line += std::string(",") + name + "=" + buf;
+    }
+  };
+  if (s.reading) {
+    line += std::string(",shelly_valid=") + (s.reading->valid ? "1" : "0");
+    if (s.reading->valid) {
+      field("house_w", s.reading->power_w, "%.0f");
+      if (s.reading->voltage_v) {
+        field("house_v", *s.reading->voltage_v, "%.1f");
+        field("house_a", s.reading->power_w / *s.reading->voltage_v, "%.2f");
+      }
+    }
+  }
+  if (s.car) {
+    line += std::string(",car_charging=") + (s.car->charging ? "1" : "0") + ",car_amps=" + std::to_string(s.car->amps);
+    if (s.car->plugged) {
+      line += std::string(",car_plugged=") + (*s.car->plugged ? "1" : "0");
+    }
+    field("car_battery_pct", s.car->battery_pct.value_or(NAN), "%.0f");
+    field("car_limit_pct", s.car->limit_pct.value_or(NAN), "%.0f");
+  }
+  field("car_current_a", s.car_current_a, "%.1f");
+  field("car_power_kw", s.car_power_kw, "%.2f");
+  if (s.last_sent) {
+    line += std::string(",sent_charging=") + (s.last_sent->charging ? "1" : "0") +
+            ",sent_amps=" + std::to_string(s.last_sent->amps);
+  }
+  line += ",sent_attempts=" + std::to_string(s.attempts) + ",heap_free=" + std::to_string(heap_free) +
+          ",heap_block=" + std::to_string(heap_block);
+  field("wifi_dbm", wifi_dbm, "%.0f");
+  field("ble_dbm", ble_dbm, "%.0f");
+  const std::string stamp = " " + std::to_string(ns) + "\n";
+  return line + stamp + "volture_state,reason=" + tag(s.reason) + ",event=" + tag(s.event) +
+         ",answer=" + tag(s.answer) + ",status=" + tag(s.status) + " value=1" + stamp;
+}
+
+// Lines waiting for the next push. Bounded: when a push keeps failing, the oldest are dropped
+// rather than eating the memory the car link needs.
+constexpr size_t MAX_BUFFER = 8 * 1024;
+
+struct Telemetry {
+  std::optional<Sample> previous;
+  double previous_at = -1e9;  // now_s() of the last buffered sample
+  std::optional<volture::Command> last_sent;
+  std::string buffer;
+};
+
+inline Telemetry &telemetry() {
+  static Telemetry instance;
+  return instance;
+}
+
+// Buffer a sample if something changed, or if a minute passed (so Grafana never shows the
+// series as stale: it drops series not seen for 5 minutes).
+inline void record(const Sample &sample, double now, unsigned heap_free, unsigned heap_block, float wifi_dbm,
+                   float ble_dbm, long long unix_ns) {
+  Telemetry &t = telemetry();
+  if (t.previous && same(*t.previous, sample) && now - t.previous_at < 60.0) {
+    return;
+  }
+  t.buffer += sample_lines(sample, heap_free, heap_block, wifi_dbm, ble_dbm, unix_ns);
+  if (t.buffer.size() > MAX_BUFFER) {
+    const size_t cut = t.buffer.find('\n', t.buffer.size() - MAX_BUFFER);
+    t.buffer.erase(0, cut == std::string::npos ? t.buffer.size() : cut + 1);
+  }
+  t.previous = sample;
+  t.previous_at = now;
+}
+
+// "Basic base64(user:token)" for the Authorization header; built once, kept for the program's life.
+inline const char *basic_auth(const std::string &user, const std::string &token) {
+  static const std::string header = [&] {
+    const std::string credentials = user + ":" + token;
+    return "Basic " + esphome::base64_encode(reinterpret_cast<const uint8_t *>(credentials.data()), credentials.size());
+  }();
+  return header.c_str();
+}
+
+template<typename Entity, typename List> float value_of(const List &entities, const char *name) {
+  Entity *entity = find<Entity>(entities, name);
+  return entity != nullptr && entity->has_state() ? entity->state : NAN;
+}
+
+inline std::string text_of(const char *name) {
+  auto *entity = find<esphome::text_sensor::TextSensor>(esphome::App.get_text_sensors(), name);
+  return entity != nullptr && entity->has_state() ? entity->state : std::string();
 }
 
 }  // namespace volture_device

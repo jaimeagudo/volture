@@ -129,6 +129,20 @@ def test_resume_waits_after_adopting(backend):
     assert ctrl.tick(140, Reading(650)) == Command(True, 5)
 
 
+def test_never_above_contract_even_if_the_reading_misses_the_car(backend):
+    # A Shelly reading stuck at 650 W (e.g. it does not see the car): 4600 W / 230 V = 20 A, never more.
+    ctrl = backend.Controller()
+    ctrl.follow_user(True, 5)
+    amps = [cmd.amps for t in range(0, 3000, 5) if (cmd := ctrl.tick(t, Reading(650))) is not None]
+    assert max(amps) == 20
+
+
+def test_app_start_above_contract_is_cut(backend):
+    ctrl = backend.Controller()
+    ctrl.follow_user(True, 32)                 # 32 A from the app, reading misses the car
+    assert ctrl.tick(0, Reading(650)) == Command(True, 20)
+
+
 def test_settings_drive_the_algorithm(backend):
     # A 3.45 kW contract, 2 A steps, 16 A charger: same algorithm, different installation.
     cfg = Config(contracted_power_w=3450, headroom_w=230, max_amps=16, ramp_up_step_amps=2)

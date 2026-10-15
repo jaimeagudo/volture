@@ -281,23 +281,27 @@ Everything comes from `secrets.yaml`. Then start charging as usual (Tesla app or
 
 Open **http://volture.local** (phone or Mac, on your Wi-Fi), user `volture`, password `web_password` from `secrets.yaml`. The page shows every value live and lets you change two things:
 
-| Entity                         | Meaning                                                                                                     |
-| ------------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| **Volture control** (switch)   | Off (default): observe only, nothing sent to the car. On: the ESP32 drives the car. Kept across reboots. Never on together with `volture.main` on the Mac |
-| **Grafana push** (switch)      | Off (default): nothing goes to the internet. On: push to Grafana, if configured ([Grafana](#grafana-optional)). Kept across reboots |
-| **Grafana push status**        | Result of the last push: `ok 204, … B`, `error 401`, `error: no answer`                                    |
-| **Shelly URL** (text)          | Where the ESP32 reads power. The real Shelly, or the Mac's fake one: `http://<Mac IP>:8081` (not `localhost`) |
-| House power, Grid voltage      | The last Shelly reading (empty: no reading)                                                                 |
-| Volture amps                   | Amps the loop has decided (0: stopped)                                                                      |
-| Volture decision               | Why, e.g. `ramp`, `no_room`, `amps_cap`, `over_limit_drop`, `no_reading_stop`, `idle`; plus what it sent (or *would send* when control is off) |
-| Volture event                  | What the car did with the last command: `confirmed`, `waiting`, `resend`, `outside_change`, `dry_run`…    |
-| Heap free / largest block / min free | ESP32 memory, to spot leaks                                                                           |
+The page opens with the Volture logo and three Volture sections, above the Tesla firmware's own entities:
 
-For tools, the same data is plain JSON: `GET http://volture.local/events` streams one JSON line per change (Server-Sent Events); `GET /sensor/House%20power` returns one value. Every cycle the log also prints one line in InfluxDB line-protocol form (`volture power_w=4330,amps=16,reason="no_room",…`): `uv run esphome logs esp32.yaml --device volture.local`.
+| Section | Entity | Meaning |
+| ------- | ------ | ------- |
+| **Volture** | Volture house power, Volture grid voltage | The last Shelly EM reading (empty: no reading) |
+| | Volture amps | Amps the loop has decided (0: stopped) |
+| | Volture decision | Why, e.g. `ramp`, `no_room`, `amps_cap`, `over_limit_drop`, `no_reading_stop`, `idle`; plus what it sent (or *would send* when control is off) |
+| | Volture event | What the car did with the last command: `confirmed`, `waiting`, `resend`, `outside_change`, `dry_run`… |
+| **Volture settings** | Volture control (switch) | Off (default): observe only, nothing sent to the car. On: the ESP32 drives the car. Kept across reboots. Never on together with `volture.main` on the Mac |
+| | Volture Shelly EM URL (text) | Where the ESP32 reads power: the real Shelly EM (`http://<Shelly IP>`), or the Mac's fake one (`http://<Mac IP>:8081`, not `localhost`) |
+| | Volture Grafana push (switch) | Off (default): nothing goes to the internet. On: push to Grafana, if configured ([Grafana](#grafana-optional)). Kept across reboots |
+| **Volture diagnostics** | Volture Grafana push status | Result of the last push: `ok 204, … B`, `error 401`, `error 405`, `error: no answer` |
+| | Volture heap free / largest block / min free | ESP32 memory, to spot leaks |
+
+The logo comes from `esp32/web_logo.js`, which embeds `volture-logo.svg` (a test fails if they differ). Renaming an entity in `esp32.yaml` resets its saved value (switches back to off, the Shelly EM URL back to `shelly_url` in `secrets.yaml`).
+
+For tools, the same data is plain JSON: `GET http://volture.local/events` streams one JSON line per change (Server-Sent Events); `GET /sensor/Volture%20house%20power` returns one value. Every cycle the log also prints one line in InfluxDB line-protocol form (`volture power_w=4330,amps=16,reason="no_room",…`): `uv run esphome logs esp32.yaml --device volture.local`.
 
 ### Grafana (optional)
 
-The ESP32 can push everything it sees to a free Grafana Cloud account, for charts and history on any phone. It sends one line per 5-second cycle in which something changed (always at least one a minute), batched once a minute. Off until you set it up and switch it on; switch "Grafana push" off on the web page at any time to stop all internet traffic.
+The ESP32 can push everything it sees to a free Grafana Cloud account, for charts and history on any phone. It sends one line per 5-second cycle in which something changed (always at least one a minute), batched once a minute. Off until you set it up and switch it on; switch "Volture Grafana push" off on the web page at any time to stop all internet traffic.
 
 **1. Get the URL and instance ID** (checked in a real account, 2026-10-15). Ignore Grafana's "Add new connection" / "How do you want to connect your Prometheus data" wizards and the **InfluxDB integration** (*Connections → InfluxDB*; it monitors an InfluxDB database server through Grafana Alloy): the ESP32 needs none of them, only the push address, instance ID and token below.
 1. Create a free account at [grafana.com](https://grafana.com). It creates a *stack*, e.g. `yourname`.
@@ -323,7 +327,7 @@ grafana_token: "<the token>"
 ```bash
 uv run esphome run esp32.yaml --device volture.local
 ```
-Open `http://volture.local`, switch **Grafana push** on. Within 2 minutes **Grafana push status** shows `ok 204, … B`. `error 401`: wrong instance ID or token; `error 405`: the URL lacks `/api/v1/push/influx/write`; `error: no answer`: no internet, or Grafana changed certificate authority (replace `esp32/grafana_ca.pem`).
+Open `http://volture.local`, switch **Volture Grafana push** on. Within 2 minutes **Volture Grafana push status** shows `ok 204, … B`. `error 401`: wrong instance ID or token; `error 405`: the URL lacks `/api/v1/push/influx/write`; `error: no answer`: no internet, or Grafana changed certificate authority (replace `esp32/grafana_ca.pem`).
 
 **5. See the data:** open your Grafana (`https://<stack>.grafana.net`) → menu **Connections** → **Data sources** → on `grafanacloud-<stack>-prom` (Prometheus, marked *default*) click **Explore** → in the metric box type `volture_`. The InfluxDB lines arrive as Prometheus metrics, so they are only queryable through that Prometheus data source. Metrics (Prometheus names = `volture_` + field):
 
@@ -373,7 +377,7 @@ Import it: in your Grafana, **Dashboards** → **New** → **Import** → *Uploa
 1. **Shelly EM Gen1 (€37) over Gen3 (€60).** Power + `is_valid` over a plain HTTP GET is all that's needed; on-device history is irrelevant because decisions happen every few seconds. Accepted risk: Gen1 firmware is frozen at 1.14.0 (2023) and only gets fixes.
 2. **The Shelly cannot replace the ESP32.** Shelly scripts can only scan BLE adverts (no GATT connection) and have ~25 KB of memory; Tesla's BLE protocol needs elliptic-curve crypto and protobuf.
 3. **Everything runs on the ESP32, 24/7, no other machine and no Home Assistant** (decided 2026-10-15). The control algorithm is ported to C++ (`esp32/controller.h`, tested) and runs on the ESP32, observe-only until "Volture control" is switched on (decision 15); until then the Python loop on a Mac drives the car. The Python version stays for debugging on a Mac, and both implementations must pass the same test scenarios so they cannot drift.
-4. **ESPHome native API for the Mac; a password-protected web page for people.** The native API (Mac ↔ ESP32) is encrypted with a key. The web page (decision 16) uses a password, but over plain HTTP: someone on the same Wi-Fi who captures traffic could read the password, and the page can also operate the car's charging controls. Accepted for a home LAN; do not expose `volture.local` to the internet.
+4. **ESPHome native API for the Mac; a password-protected web page for people.** The native API (Mac ↔ ESP32) is encrypted with a key. The web page (decision 16) uses a password with *digest* login, so the password itself never travels; the page itself is plain HTTP, so its content can be read on the Wi-Fi, and it can operate the car's charging controls. Firmware updates through the page are disabled (`ota: false`): only `esphome run` (encrypted) can flash. Accepted for a home LAN; do not expose `volture.local` to the internet.
 5. **Firmware from `esp32.yaml`, not a local clone.** `esp32.yaml` pulls the yoziru firmware from GitHub at a pinned release. No clone, no Makefile; upgrading is changing `tesla_ble_ref` (and the matching `esphome` version in `pyproject.toml`).
 6. **Least-privileged car key** (`CHARGING_MANAGER`): a leaked key can only affect charging.
 7. **One file to configure everything** (`secrets.yaml`): secrets shared by firmware and Python, plus every algorithm setting in its `volture:` block.
@@ -386,7 +390,7 @@ Import it: in your Grafana, **Dashboards** → **New** → **Import** → *Uploa
 14. **Hard amps cap from basic maths** (decided 2026-10-15). Amps never exceed the lower of `max_amps` and ⌊`contracted_power_w` / V⌋ (20 A at 4,600 W / 230 V), whatever the Shelly reports. Added after a test where a fake Shelly reading that did not include the car let Volture reach 22 A (5,060 W). Since then `--sim-shelly` with the real car adds the real car's power to the fake reading, as a real clamp would.
 15. **The ESP32's loop starts observe-only** (decided 2026-10-15). Switch "Volture control" on its web page decides whether it drives the car; off by default, then kept across reboots. With it off the loop still reads everything and shows what it *would* send, so its decisions can be compared with the Mac's before handing over. Never run both in control at once.
 16. **The ESP32 always serves its web page** (owner's requirement, 2026-10-15): live values and the JSON stream at `/events`, at `http://volture.local`. It is never removed or made optional to save memory or flash.
-17. **Grafana push: optional, off by default, one switch** (decided 2026-10-15). The ESP32 sends nothing to the internet unless `grafana_url` is set **and** "Grafana push" is on (web page, kept across reboots). It sends one line per 5-second cycle in which something changed (at least one a minute), batched once a minute; no summaries. Costs 0.6% flash, by trusting only Grafana Cloud's root certificate (DigiCert Global Root G2, `esp32/grafana_ca.pem`) instead of ESP-IDF's whole bundle. Network time (SNTP) is used **only** to timestamp those lines, never by the control logic. Memory is tight during a push (measured ~12.6 KB free at the lowest); watch `volture_heap_block` in Grafana. Details: [issue #12](https://github.com/jaimeagudo/volture/issues/12).
+17. **Grafana push: optional, off by default, one switch** (decided 2026-10-15). The ESP32 sends nothing to the internet unless `grafana_url` is set **and** "Volture Grafana push" is on (web page, kept across reboots). It sends one line per 5-second cycle in which something changed (at least one a minute), batched once a minute; no summaries. Costs 0.6% flash, by trusting only Grafana Cloud's root certificate (DigiCert Global Root G2, `esp32/grafana_ca.pem`) instead of ESP-IDF's whole bundle. Network time (SNTP) is used **only** to timestamp those lines, never by the control logic. Memory is tight during a push (measured ~12.6 KB free at the lowest); watch `volture_heap_block` in Grafana. Details: [issue #12](https://github.com/jaimeagudo/volture/issues/12).
 
 ---
 

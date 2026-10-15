@@ -77,6 +77,9 @@ class Controller {
     low_since_.reset();
   }
 
+  // Why the last tick decided what it did, for observing the device (web page, logs). Static strings.
+  const char *reason = "start";
+
   // car_can_charge: false when the car is unplugged or at its battery charge limit.
   std::optional<Command> tick(double now, const std::optional<Reading> &reading, bool car_can_charge = true) {
     const Config &c = cfg_;
@@ -86,15 +89,15 @@ class Controller {
         invalid_since_ = now;
       }
       if (!charging) {
-        return std::nullopt;
+        return because_("no_reading_idle", std::nullopt);
       }
       if (now - *invalid_since_ >= c.stop_after_invalid_s) {
-        return stop_(now, true);
+        return because_("no_reading_stop", stop_(now, true));
       }
       if (amps > c.min_amps) {
-        return set_(c.min_amps, now);
+        return because_("no_reading_min", set_(c.min_amps, now));
       }
-      return std::nullopt;
+      return because_("no_reading_wait", std::nullopt);
     }
     invalid_since_.reset();
     const double p = reading->power_w;
@@ -107,9 +110,9 @@ class Controller {
       if (p > c.contracted_power_w) {
         low_since_.reset();
         if (now - last_change_ >= c.ramp_up_every_s) {
-          return stop_(now, paused_by_us);
+          return because_("over_contract_stop", stop_(now, paused_by_us));
         }
-        return std::nullopt;
+        return because_("over_contract_wait", std::nullopt);
       }
       // Restart only a charge Volture stopped itself, if the car can take charge and
       // house + minimum charge fits the ceiling.
@@ -119,12 +122,12 @@ class Controller {
         }
         if (now - *low_since_ >= c.resume_after_s) {
           low_since_.reset();
-          return set_(c.min_amps, now);
+          return because_("resume", set_(c.min_amps, now));
         }
-      } else {
-        low_since_.reset();
+        return because_("resume_wait", std::nullopt);
       }
-      return std::nullopt;
+      low_since_.reset();
+      return because_(paused_by_us ? "paused_no_room" : "idle", std::nullopt);
     }
 
     // Basic maths, whatever the Shelly says: the car alone must never draw more than the
@@ -135,27 +138,38 @@ class Controller {
       int target = std::min(amps - delta, amps_cap);
       if (target < c.min_amps) {
         if (amps == c.min_amps && p > c.contracted_power_w) {
-          return stop_(now, true);
+          return because_("over_limit_stop", stop_(now, true));
         }
         target = c.min_amps;
       }
       if (target != amps) {
-        return set_(target, now);
+        return because_("over_limit_drop", set_(target, now));
       }
-      return std::nullopt;
+      return because_("over_limit_at_min", std::nullopt);
     }
 
     if (amps > amps_cap) {
-      return set_(amps_cap, now);
+      return because_("amps_cap", set_(amps_cap, now));
     }
     const int step = std::min(c.ramp_up_step_amps, amps_cap - amps);
     if (step > 0 && p + step * volts <= c.working_limit_w() && now - last_change_ >= c.ramp_up_every_s) {
-      return set_(amps + step, now);
+      return because_("ramp", set_(amps + step, now));
     }
-    return std::nullopt;
+    if (step <= 0) {
+      return because_("at_max", std::nullopt);
+    }
+    if (p + step * volts > c.working_limit_w()) {
+      return because_("no_room", std::nullopt);
+    }
+    return because_("ramp_wait", std::nullopt);
   }
 
  private:
+  std::optional<Command> because_(const char *why, std::optional<Command> cmd) {
+    reason = why;
+    return cmd;
+  }
+
   Command set_(int new_amps, double now) {
     charging = true;
     amps = new_amps;
@@ -249,5 +263,88 @@ inline std::pair<Action, std::optional<Pending>> reconcile(const Pending &pendin
   }
   return {Action::ADOPT, std::nullopt};
 }
+
+// ---- One control cycle: port of volture/main.py (confirm -> follow the app -> tick) ----
+
+struct LoopSettings {
+  double confirm_timeout_s = 15.0;  // wait this long for the car to report the commanded state
+  int confirm_max_attempts = 3;     // sends per command before trusting the car's state
+};
+
+// What one cycle wants sent to the car, in this order, and what happened (static strings).
+struct Cycle {
+  std::optional<Command> resend;   // an unconfirmed command, sent again
+  std::optional<Command> command;  // a new decision
+  const char *event = "none";      // confirmed, waiting, resend, outside_change, adopted, gave_up...
+  bool dry_run = false;            // true: control is off, send nothing (command shows what it would do)
+};
+
+class Loop {
+ public:
+  explicit Loop(Config cfg = Config(), LoopSettings settings = LoopSettings()) : ctrl(cfg), settings_(settings) {}
+
+  Controller ctrl;
+  std::optional<Pending> pending;
+  std::optional<CarState> last;  // previous report, to tell Volture's changes from the app's
+
+  // control false: dry run. Follows the car, decides, and reports what it would send.
+  Cycle step(double now, const std::optional<Reading> &reading, const std::optional<CarState> &observed,
+             bool control) {
+    Cycle out;
+    if (!control) {
+      pending.reset();
+      if (observed) {
+        ctrl.adopt(observed->charging, observed->amps);
+        last = observed;
+      }
+      out.command = ctrl.tick(now, reading, can_charge(observed));
+      out.event = "dry_run";
+      out.dry_run = true;
+      return out;
+    }
+    if (external_change(pending, last, observed)) {
+      // Not what Volture asked for: the Tesla app, a schedule or the car itself did it.
+      ctrl.follow_user(observed->charging, observed->amps);
+      pending.reset();
+      out.event = "outside_change";
+    } else if (!pending) {
+      if (observed && !matches(Command{ctrl.charging, ctrl.amps}, *observed)) {
+        ctrl.adopt(observed->charging, observed->amps);  // first report after startup, or after giving up
+        out.event = "adopted";
+      }
+    } else {
+      auto [action, left] = reconcile(*pending, observed, now, settings_.confirm_timeout_s,
+                                      settings_.confirm_max_attempts);
+      if (action == Action::RESEND) {
+        out.resend = pending->cmd;
+        out.event = "resend";
+      } else if (action == Action::ADOPT) {
+        ctrl.adopt(observed->charging, observed->amps);
+        out.event = "gave_up_adopted";
+      } else if (action == Action::UNKNOWN) {
+        out.event = "gave_up_no_state";
+      } else if (action == Action::CONFIRMED) {
+        out.event = "confirmed";
+      } else {
+        out.event = "waiting";
+      }
+      pending = left;
+    }
+    if (observed) {
+      last = observed;
+    }
+    auto cmd = ctrl.tick(now, reading, can_charge(observed));
+    // A repeat of the unconfirmed command is left to reconcile(): re-sending it here would restart
+    // its attempt count, so the car's state would never be adopted.
+    if (cmd && (!pending || *cmd != pending->cmd)) {
+      out.command = cmd;
+      pending = Pending{*cmd, now};
+    }
+    return out;
+  }
+
+ private:
+  LoopSettings settings_;
+};
 
 }  // namespace volture

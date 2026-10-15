@@ -9,6 +9,8 @@
 //   external <pending|-> <car|-> <car|->    -> 0|1
 //   can_charge <car|->                      -> 0|1
 //   reconcile <pending> <car|-> <now> <timeout_s> <max_attempts> -> <ACTION> <pending|->
+//   step <now> <power|-> <valid> <volts|-> <car|-> <control>   -> <resend|-> <command|-> <event> <reason> <dry_run>
+//                                              (Loop: one control cycle; cmd tokens are charging,amps)
 // where car = charging,amps,plugged,battery,limit   pending = charging,amps,sent_at,attempts
 #include <cstdio>
 #include <iostream>
@@ -85,6 +87,7 @@ const char *action_name(Action action) {
 int main() {
   Config cfg;
   std::optional<Controller> ctrl;
+  std::optional<Loop> loop;
   std::string line;
   while (std::getline(std::cin, line)) {
     try {
@@ -126,6 +129,22 @@ int main() {
           }
           reply = out.str();
         }
+      } else if (op == "step") {
+        if (!loop) {
+          loop.emplace(cfg);
+        }
+        std::string now, power, valid, volts, car, control;
+        in >> now >> power >> valid >> volts >> car >> control;
+        std::optional<Reading> reading;
+        if (power != "-") {
+          reading = Reading{std::stod(power), valid == "1", opt_double(volts)};
+        }
+        Cycle cycle = loop->step(std::stod(now), reading, parse_car(car), control == "1");
+        auto token = [](const std::optional<Command> &cmd) {
+          return cmd ? std::to_string(cmd->charging ? 1 : 0) + "," + std::to_string(cmd->amps) : std::string("-");
+        };
+        reply = token(cycle.resend) + " " + token(cycle.command) + " " + cycle.event + " " + loop->ctrl.reason +
+                " " + (cycle.dry_run ? "1" : "0");
       } else {
         if (!ctrl) {
           ctrl.emplace(cfg);  // the controller is built on its first use, after any config line

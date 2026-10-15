@@ -6,7 +6,7 @@
 
 A **Shelly EM** clamp on the main feed measures what the whole house draws. Every 5 s, Volture reads it and decides how many amps (5–32 A) the car may use right now. An **ESP32** passes that to the car over Bluetooth Low Energy (BLE). When the oven turns on, the car slows down; when it turns off, the car speeds up again.
 
-**Target:** the ESP32 does everything on its own, 24/7: read the Shelly, decide, command the car. **Today** the decision loop still runs in Python on a Mac; the C++ version for the ESP32 is written and tested (`esp32/controller.h`) but not yet running on the device.
+**Target:** the ESP32 does everything on its own, 24/7: read the Shelly, decide, command the car. **Today** the C++ loop runs on the ESP32 but only observes ("Volture control" off: it shows what it would do and sends nothing); the Python loop on a Mac drives the car. Turning "Volture control" on, with the Mac loop stopped, hands control to the ESP32.
 
 > **Safety:** this is a load *manager*, not a protection device. It does not replace the utility's power limiter or the breakers. Every failure mode is designed to end in "charge less" or "stop charging" (see [Fail-safe](#fail-safe)).
 
@@ -16,8 +16,9 @@ A **Shelly EM** clamp on the main feed measures what the whole house draws. Ever
 
 | Piece                                        | State                                                                                                                                                |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Control algorithm + tests                    | Done in Python and in C++ (`esp32/controller.h`); the same 24 scenarios pass on both; every setting in `secrets.yaml`                               |
-| Control loop running on the ESP32 itself     | **Planned:** read the Shelly and drive the car from the ESP32, so no other machine is needed. Until then, run `volture.main` on a Mac              |
+| Control algorithm + tests                    | Done in Python and in C++ (`esp32/controller.h`); the same 24 scenarios pass on both, plus 6 for the C++ cycle on its own; every setting in `secrets.yaml`                               |
+| Control loop running on the ESP32 itself     | Running, **observe-only by default** (switch "Volture control" on its web page). Decisions match the Mac's on the same reading. Settings: built-in defaults for now |
+| Observing the ESP32 (web page, live JSON)     | Done: `http://volture.local` (see [Watching the ESP32](#watching-the-esp32))                                                                         |
 | Simulator (fake Shelly + fake car, web page) | Done, run end to end                                                                                                                                 |
 | ESP32 firmware                               | Built from `esp32.yaml`, flashed, on Wi-Fi as `volture.local`                                                                                        |
 | Mac → ESP32 commands (`EsphomeCar`)          | Done; ESP32 confirmed receiving "set amps" and "charging on/off"                                                                                     |
@@ -115,9 +116,11 @@ volture/
 │   ├── model.py          # Model 3 + house model
 │   ├── server.py         # Fake Shelly Gen1 + fake car + control page (http://localhost:8081/)
 │   └── car.py            # SimHttpCar: the simulated car, same interface as EsphomeCar
-├── esp32/controller.h    # C++ port of controller.py + confirm.py, for the ESP32 (standard library only)
+├── esp32/controller.h    # C++ port of controller.py + confirm.py + main.py's cycle (Loop), standard library only
+├── esp32/device.h        # ESP32 adapters: read the car's entities, parse the Shelly reply, send commands
 ├── tests/
 │   ├── test_controller.py  # Every scenario, run against Python and against the C++ port
+│   ├── test_loop.py        # The C++ control cycle driving the simulated car, as on the ESP32
 │   ├── conftest.py         # The two backends; compiles the C++ test driver into .tmp/
 │   └── cpp/controller_cli.cpp  # Test driver: controller.h behind a stdin/stdout line protocol
 └── pyproject.toml
@@ -211,6 +214,7 @@ cp secrets.example.yaml secrets.yaml && open -e secrets.yaml
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `wifi_ssid`, `wifi_password`   | Your Wi-Fi. It must offer **2.4 GHz**; the ESP32 cannot use 5 GHz.                                                                                                                                                                                                                       |
 | `wifi2_ssid`, `wifi2_password` | A second Wi-Fi (e.g. office and garage). The ESP32 joins whichever is in range. Both are required.                                                                                                                                                                                       |
+| `web_password`                 | Password of the ESP32's web page (user `volture`). Any long random string.                                                                                                                                                                                                              |
 | `wifi_hotspot_password`        | 8+ characters. The ESP32 opens its own Wi-Fi with it if it cannot join yours.                                                                                                                                                                                                            |
 | `api_encryption_key`           | Encrypts Mac ↔ ESP32 traffic. Generate it with the command in the template.                                                                                                                                                                                                              |
 | `tesla_vin`                    | The car's VIN (17 characters, in the Tesla app).                                                                                                                                                                                                                                         |
@@ -272,6 +276,22 @@ uv run python -m volture.main
 
 Everything comes from `secrets.yaml`. Then start charging as usual (Tesla app or the car's schedule); Volture takes it from there.
 
+### Watching the ESP32
+
+Open **http://volture.local** (phone or Mac, on your Wi-Fi), user `volture`, password `web_password` from `secrets.yaml`. The page shows every value live and lets you change two things:
+
+| Entity                         | Meaning                                                                                                     |
+| ------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| **Volture control** (switch)   | Off (default): observe only, nothing sent to the car. On: the ESP32 drives the car. Kept across reboots. Never on together with `volture.main` on the Mac |
+| **Shelly URL** (text)          | Where the ESP32 reads power. The real Shelly, or the Mac's fake one: `http://<Mac IP>:8081` (not `localhost`) |
+| House power, Grid voltage      | The last Shelly reading (empty: no reading)                                                                 |
+| Volture amps                   | Amps the loop has decided (0: stopped)                                                                      |
+| Volture decision               | Why, e.g. `ramp`, `no_room`, `amps_cap`, `over_limit_drop`, `no_reading_stop`, `idle`; plus what it sent (or *would send* when control is off) |
+| Volture event                  | What the car did with the last command: `confirmed`, `waiting`, `resend`, `outside_change`, `dry_run`…    |
+| Heap free / largest block / min free | ESP32 memory, to spot leaks                                                                           |
+
+For tools, the same data is plain JSON: `GET http://volture.local/events` streams one JSON line per change (Server-Sent Events); `GET /sensor/House%20power` returns one value. Every cycle the log also prints one line in InfluxDB line-protocol form (`volture power_w=4330,amps=16,reason="no_room",…`): `uv run esphome logs esp32.yaml --device volture.local`.
+
 ### Troubleshooting
 
 | Symptom                                                                                           | Likely cause                                                                                                                                                                     |
@@ -312,7 +332,9 @@ Everything comes from `secrets.yaml`. Then start charging as usual (Tesla app or
 - Pair with the car and run a real charge (step 7), then with the Shelly (steps 8–9). Check in the log that the car's reported state confirms each command (`car confirmed …`).
 - Measure how often the Shelly Gen1 refreshes `power` (`curl` every second); it bounds how short `poll_s` can be.
 - Confirm the clamp model (50 A or 120 A) covers the house's peak. The installation is single-phase.
-- Run the control loop on the ESP32 itself (decision 3): poll the Shelly over Wi-Fi, call `esp32/controller.h`, drive the car, publish the state; then a password-protected settings page on the ESP32.
+- Hand control to the ESP32 for real ("Volture control" on, Mac loop off) once the real Shelly is in.
+- Settings on the ESP32's page (today it uses the built-in defaults, identical to `secrets.example.yaml`).
+- Remote storage / Grafana: HTTPS from the ESP32 works with Bluetooth connected, but memory is tight (see the PR that added the web page); needs a soak test before pushing data every few seconds.
 
 ## Possible improvements
 

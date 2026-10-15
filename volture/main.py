@@ -116,14 +116,18 @@ async def run(shelly_url: str, car, cfg: Config, loop: LoopSettings) -> None:
         await car.stop()
 
 
-def make_car(sim_car: bool, sim_url: str, esphome_host: str):
+def make_car(sim_car: bool, sim_shelly: bool, sim_url: str, esphome_host: str):
     if sim_car:
         from simulator.car import (
             SimHttpCar,  # simulator code is not needed in production
         )
         return SimHttpCar(sim_url)
     from .car import EsphomeCar
-    return EsphomeCar(esphome_host, read_secret("api_encryption_key"))
+    car = EsphomeCar(esphome_host, read_secret("api_encryption_key"))
+    if sim_shelly:
+        from simulator.car import RealCarSeenBySimShelly
+        return RealCarSeenBySimShelly(car, sim_url)  # the fake Shelly must see the real car's load
+    return car
 
 
 if __name__ == "__main__":
@@ -140,7 +144,7 @@ if __name__ == "__main__":
     log.info("car: %s", f"simulated at {a.sim_url}" if a.sim_car else f"real, via {loop_settings.esphome_host}")
     log.info("settings: %s %s", config, loop_settings)
     try:
-        car = make_car(a.sim_car, a.sim_url, loop_settings.esphome_host)
+        car = make_car(a.sim_car, a.sim_shelly, a.sim_url, loop_settings.esphome_host)
         asyncio.run(run(shelly_url, car, config, loop_settings))
     except KeyboardInterrupt:
         pass

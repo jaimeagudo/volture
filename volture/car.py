@@ -123,4 +123,6 @@ class EsphomeCar:
         if cmd.charging:
             # Amps first, so charging never (re)starts at a stale, higher setpoint.
             self.client.number_command(self.keys[AMPS_ENTITY], float(cmd.amps))
-        self.client.switch_command(self.keys[CHARGER_ENTITY], cmd.charging)
+        # An amps change while charging needs no "start": the car rejects it ("is_charging").
+        if self._value(SwitchState, CHARGER_ENTITY) != cmd.charging:
+            self.client.switch_command(self.keys[CHARGER_ENTITY], cmd.charging)

@@ -127,9 +127,12 @@ class Controller {
       return std::nullopt;
     }
 
+    // Basic maths, whatever the Shelly says: the car alone must never draw more than the
+    // contracted power (4600 W / 230 V = 20 A). Guards against a reading that misses the car.
+    const int amps_cap = std::min(c.max_amps, static_cast<int>(std::floor(c.contracted_power_w / volts)));
     if (p > c.working_limit_w()) {
       const int delta = static_cast<int>(std::ceil((p - c.working_limit_w()) / volts));
-      int target = amps - delta;
+      int target = std::min(amps - delta, amps_cap);
       if (target < c.min_amps) {
         if (amps == c.min_amps && p > c.contracted_power_w) {
           return stop_(now, true);
@@ -142,7 +145,10 @@ class Controller {
       return std::nullopt;
     }
 
-    const int step = std::min(c.ramp_up_step_amps, c.max_amps - amps);
+    if (amps > amps_cap) {
+      return set_(amps_cap, now);
+    }
+    const int step = std::min(c.ramp_up_step_amps, amps_cap - amps);
     if (step > 0 && p + step * volts <= c.working_limit_w() && now - last_change_ >= c.ramp_up_every_s) {
       return set_(amps + step, now);
     }

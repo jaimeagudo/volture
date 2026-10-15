@@ -16,7 +16,7 @@ A **Shelly EM** clamp on the main feed measures what the whole house draws. Ever
 
 | Piece                                        | State                                                                                                                                                |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Control algorithm + tests                    | Done in Python and in C++ (`esp32/controller.h`); the same 22 scenarios pass on both; every setting in `secrets.yaml`                               |
+| Control algorithm + tests                    | Done in Python and in C++ (`esp32/controller.h`); the same 24 scenarios pass on both; every setting in `secrets.yaml`                               |
 | Control loop running on the ESP32 itself     | **Planned:** read the Shelly and drive the car from the ESP32, so no other machine is needed. Until then, run `volture.main` on a Mac              |
 | Simulator (fake Shelly + fake car, web page) | Done, run end to end                                                                                                                                 |
 | ESP32 firmware                               | Built from `esp32.yaml`, flashed, on Wi-Fi as `volture.local`                                                                                        |
@@ -67,7 +67,8 @@ Runs every `poll_s` with the Shelly reading (`power`, `voltage`, `is_valid`). Th
 | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | Charging and power > 4,370 W                                               | Drop ⌈(P − 4,370) / V⌉ A at once, minimum `min_amps` (5)                                       |
 | Already at 5 A and power > 4,600 W                                         | Stop charging                                                                                  |
-| Charging and power + `ramp_up_step_amps` × V ≤ 4,370 W                     | Raise `ramp_up_step_amps` (1) A, at most every `ramp_up_every_s` (15 s), up to `max_amps` (32) |
+| Charging and power + `ramp_up_step_amps` × V ≤ 4,370 W                     | Raise `ramp_up_step_amps` (1) A, at most every `ramp_up_every_s` (15 s), up to the amps cap   |
+| Always, whatever the Shelly says                                           | **Amps cap** = the lower of `max_amps` (32) and ⌊4,600 / V⌋ (**20 A** at 230 V): the car alone never exceeds the contracted power |
 | Otherwise while charging                                                   | Hold                                                                                           |
 | Stopped **by Volture** and house + 5 A × V fits under 4,370 W for `resume_after_s` (60 s) | Restart at 5 A, unless unplugged or at its battery charge limit                   |
 | Stopped by anyone else, or never started                                   | Nothing: **Volture never starts a charge**                                                     |
@@ -198,7 +199,7 @@ Stop any program with `Ctrl + C`.
 
 #### Be the Shelly while driving the real car
 
-Before the Shelly is installed, you can debug with the **real ESP32 and car**: run `simulator.server`, then `volture.main --sim-shelly`, plug in and start charging from the Tesla app. Leave the page's simulated car stopped: then the power you type is exactly what volture reads. The real car's own load is not added, so type the total you want it to see.
+Before the Shelly is installed, you can debug with the **real ESP32 and car**: run `simulator.server`, then `volture.main --sim-shelly`, plug in and start charging from the Tesla app. Type only the **house** power on the page: Volture copies the real car's state into the page's simulated car, so the fake reading is house + real car (amps × V), as a real clamp would measure. The page's car section then shows the real car; do not use its buttons in this mode.
 
 ### 4. Fill in the secrets
 

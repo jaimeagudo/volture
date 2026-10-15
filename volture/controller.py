@@ -134,16 +134,21 @@ class Controller:
                 self.low_since = None
             return None
 
+        # Basic maths, whatever the Shelly says: the car alone must never draw more than the
+        # contracted power (4600 W / 230 V = 20 A). Guards against a reading that misses the car.
+        amps_cap = min(c.max_amps, math.floor(c.contracted_power_w / volts))
         if p > c.working_limit_w:
             delta = math.ceil((p - c.working_limit_w) / volts)
-            target = self.amps - delta
+            target = min(self.amps - delta, amps_cap)
             if target < c.min_amps:
                 if self.amps == c.min_amps and p > c.contracted_power_w:
                     return self._stop(now, resumable=True)
                 target = c.min_amps
             return self._set(target, now) if target != self.amps else None
 
-        step = min(c.ramp_up_step_amps, c.max_amps - self.amps)
+        if self.amps > amps_cap:
+            return self._set(amps_cap, now)
+        step = min(c.ramp_up_step_amps, amps_cap - self.amps)
         if (step > 0
                 and p + step * volts <= c.working_limit_w
                 and now - self.last_change >= c.ramp_up_every_s):

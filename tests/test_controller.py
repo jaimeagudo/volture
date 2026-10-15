@@ -8,7 +8,6 @@ from volture.controller import (
     Controller,
     Reading,
     effective_voltage,
-    in_offpeak,
 )
 
 from simulator.model import World
@@ -18,7 +17,6 @@ class Harness:
     def __init__(self, base_w=650.0, cfg=None, voltage_v=230.0):
         self.world, self.ctrl, self.t = World(base_w=base_w, voltage_v=voltage_v), Controller(cfg), 0.0
         self.totals = []
-        self.local_hour = None
 
     def run(self, seconds, tick=5):
         for i in range(seconds):
@@ -28,7 +26,7 @@ class Harness:
             if i % tick == 0:
                 online = self.world.shelly_online
                 r = Reading(total, self.world.shelly_valid, self.world.voltage_v) if online else None
-                cmd = self.ctrl.tick(self.t, r, self.local_hour)
+                cmd = self.ctrl.tick(self.t, r)
                 if cmd:
                     self.world.car.command(cmd, self.t)
 
@@ -128,23 +126,6 @@ class ControllerTests(unittest.TestCase):
         reading = Reading(650, True, 12.0)
         self.assertEqual(effective_voltage(cfg, reading), cfg.fallback_voltage_v)
 
-    def test_offpeak_window_across_midnight(self):
-        cfg = Config(offpeak_start_hour=22, offpeak_end_hour=7)
-        self.assertEqual([h for h in range(24) if in_offpeak(cfg, h)], [0, 1, 2, 3, 4, 5, 6, 22, 23])
-        self.assertTrue(in_offpeak(Config(), 15))  # no window: always allowed
-
-    def test_charges_only_inside_offpeak(self):
-        h = Harness(650, Config(offpeak_start_hour=0, offpeak_end_hour=8))
-        h.local_hour = 12
-        h.run(300)
-        self.assertFalse(h.car.charging)          # never starts outside the window
-        h.local_hour = 1
-        h.run(300)
-        self.assertTrue(h.car.charging)
-        h.local_hour = 8
-        h.run(20)
-        self.assertFalse(h.car.charging)          # stopped as the window closes
-
 
 class ConfirmTests(unittest.TestCase):
     def setUp(self):
@@ -195,14 +176,6 @@ class TeslaAppPriorityTests(unittest.TestCase):
         h.car.force(Command(True, 32))             # 650 + 32*230 = 8010 W
         h.run(30)
         self.assertLessEqual(h.total(), 4370)
-
-    def test_app_start_ignores_offpeak_window(self):
-        h = Harness(650, Config(offpeak_start_hour=0, offpeak_end_hour=8))
-        h.local_hour = 12
-        h.ctrl.follow_user(True, 10)
-        h.car.force(Command(True, 10))
-        h.run(100)
-        self.assertTrue(h.car.charging)
 
     def test_unplug_hands_control_back(self):
         ctrl = Controller()

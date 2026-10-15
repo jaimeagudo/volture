@@ -27,7 +27,6 @@ class LoopSettings:
     car_command_timeout_s: float = 10.0  # a command never stalls power readings longer than this
     confirm_timeout_s: float = 15.0      # wait this long for the car to report the commanded state
     confirm_max_attempts: int = 3        # sends per command before trusting the car's state
-    timezone: str = "Europe/Madrid"      # for the off-peak window hours
 
 
 def _load(path: Path) -> dict:
@@ -76,11 +75,5 @@ def _check(cfg: Config, loop: LoopSettings) -> None:
         problems.append("need 0 < min_amps <= max_amps")
     if cfg.working_limit_w <= 0:
         problems.append("need headroom_w < contracted_power_w")
-    for name in ("offpeak_start_hour", "offpeak_end_hour"):
-        hour = getattr(cfg, name)
-        if hour is not None and not (isinstance(hour, int) and 0 <= hour <= 23):
-            problems.append(f"{name} must be a whole hour 0-23")
-    if (cfg.offpeak_start_hour is None) != (cfg.offpeak_end_hour is None):
-        problems.append("set both offpeak_start_hour and offpeak_end_hour, or neither")
     if problems:
         raise SystemExit("bad settings: " + "; ".join(problems))

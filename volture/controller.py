@@ -1,8 +1,9 @@
 """Pure control logic: keeps house + car power under the contracted limit.
 
 The Shelly clamp sits on the main feed, so its reading already includes the car.
-No I/O here: feed it (time, reading, local hour) and it returns a Command when something changes.
-Every tunable lives in Config, filled from the `volture:` block of secrets.yaml (see settings.py).
+No I/O here: feed it (time, reading) and it returns a Command when something changes.
+Every tunable lives in Config, filled from the `volture:` block of secrets.yaml (see secrets.py).
+There is deliberately no time-based scheduling: the car or the owner decide when to charge.
 """
 from __future__ import annotations
 
@@ -25,10 +26,6 @@ class Config:
     ramp_up_every_s: float = 15.0       # minimum time between ramp-up steps
     resume_after_s: float = 60.0        # power must stay low this long before restarting
     stop_after_invalid_s: float = 30.0  # no trustworthy reading for this long -> stop
-    # Off-peak window in local time (settings.timezone), whole hours 0-23. Charging only inside
-    # [start, end); it may cross midnight (22 -> 7). Both None: charge any time.
-    offpeak_start_hour: Optional[int] = None
-    offpeak_end_hour: Optional[int] = None
 
     @property
     def working_limit_w(self) -> float:
@@ -48,16 +45,6 @@ class Command:
     amps: int
 
 
-def in_offpeak(cfg: Config, local_hour: Optional[int]) -> bool:
-    """True when charging is allowed at this local hour (always, if no window or hour unknown)."""
-    start, end = cfg.offpeak_start_hour, cfg.offpeak_end_hour
-    if start is None or end is None or local_hour is None or start == end:
-        return True
-    if start < end:
-        return start <= local_hour < end
-    return local_hour >= start or local_hour < end  # window crosses midnight
-
-
 def effective_voltage(cfg: Config, reading: Reading) -> float:
     low, high = PLAUSIBLE_VOLTAGE_V
     if reading.voltage_v is not None and low <= reading.voltage_v <= high:
@@ -74,7 +61,7 @@ class Controller:
         self.low_since: Optional[float] = None
         self.invalid_since: Optional[float] = None
         # The Tesla app has priority. user_paused: stopped from the app, never restart on our own.
-        # user_amps: started / set from the app: never ramp above it, ignore the off-peak window.
+        # user_amps: started / set from the app: never ramp above it.
         self.user_paused = False
         self.user_amps: Optional[int] = None
 
@@ -105,11 +92,10 @@ class Controller:
         self.last_change = now
         return Command(False, 0)
 
-    def tick(self, now: float, reading: Optional[Reading], local_hour: Optional[int] = None,
+    def tick(self, now: float, reading: Optional[Reading],
              car_can_charge: bool = True) -> Optional[Command]:
         """car_can_charge: False when the car is unplugged or at its battery charge limit."""
         c = self.cfg
-        allowed = self.user_amps is not None or in_offpeak(c, local_hour)
         max_amps = c.max_amps if self.user_amps is None else min(c.max_amps, self.user_amps)
         if reading is None or not reading.valid:
             self.low_since = None
@@ -117,7 +103,7 @@ class Controller:
                 self.invalid_since = now
             if not self.charging:
                 return None
-            if not allowed or now - self.invalid_since >= c.stop_after_invalid_s:
+            if now - self.invalid_since >= c.stop_after_invalid_s:
                 return self._stop(now)
             if self.amps > c.min_amps:
                 return self._set(c.min_amps, now)
@@ -136,9 +122,9 @@ class Controller:
                 if now - self.last_change >= c.ramp_up_every_s:
                     return self._stop(now)
                 return None
-            # Restart only if not stopped from the app, the car can take charge, inside the
-            # off-peak window, and house + minimum charge fits the ceiling.
-            if (not self.user_paused and car_can_charge and allowed
+            # Restart only if not stopped from the app, the car can take charge, and
+            # house + minimum charge fits the ceiling.
+            if (not self.user_paused and car_can_charge
                     and p + c.min_amps * volts <= c.working_limit_w):
                 if self.low_since is None:
                     self.low_since = now
@@ -148,9 +134,6 @@ class Controller:
             else:
                 self.low_since = None
             return None
-
-        if not allowed:
-            return self._stop(now)
 
         if p > c.working_limit_w:
             delta = math.ceil((p - c.working_limit_w) / volts)

@@ -13,9 +13,7 @@ import asyncio
 import logging
 import time
 from dataclasses import replace
-from datetime import datetime
 from typing import Optional
-from zoneinfo import ZoneInfo
 
 import aiohttp
 from yarl import URL
@@ -96,7 +94,6 @@ async def confirm(ctrl: Controller, car, pending: Optional[Pending], last: Optio
 
 async def run(shelly_url: str, car, cfg: Config, loop: LoopSettings) -> None:
     ctrl = Controller(cfg)
-    zone = ZoneInfo(loop.timezone)
     pending: Optional[Pending] = None
     last: Optional[CarState] = None  # previous report, to tell Volture's changes from the app's
     await car.start()
@@ -108,7 +105,7 @@ async def run(shelly_url: str, car, cfg: Config, loop: LoopSettings) -> None:
                 observed = await observe(car)
                 pending = await confirm(ctrl, car, pending, last, observed, now, loop)
                 last = observed if observed is not None else last
-                cmd = ctrl.tick(now, reading, datetime.now(zone).hour, can_charge(observed))
+                cmd = ctrl.tick(now, reading, can_charge(observed))
                 log.info("reading=%s car=%s -> %s", reading, observed, cmd)
                 # A repeat of the unconfirmed command is left to confirm(): re-sending it here
                 # would restart its attempt count, so the car's state would never be adopted.

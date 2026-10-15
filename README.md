@@ -323,7 +323,7 @@ grafana_token: "<the token>"
 ```bash
 uv run esphome run esp32.yaml --device volture.local
 ```
-Open `http://volture.local`, switch **Grafana push** on. Within 2 minutes **Grafana push status** shows `ok 204, … B`. `error 401`: wrong instance ID or token; `error 404`: the URL lacks `/api/v1/push/influx/write`; `error: no answer`: no internet, or Grafana changed certificate authority (replace `esp32/grafana_ca.pem`).
+Open `http://volture.local`, switch **Grafana push** on. Within 2 minutes **Grafana push status** shows `ok 204, … B`. `error 401`: wrong instance ID or token; `error 405`: the URL lacks `/api/v1/push/influx/write`; `error: no answer`: no internet, or Grafana changed certificate authority (replace `esp32/grafana_ca.pem`).
 
 **5. See the data:** open your Grafana (`https://<stack>.grafana.net`) → menu **Connections** → **Data sources** → on `grafanacloud-<stack>-prom` (Prometheus, marked *default*) click **Explore** → in the metric box type `volture_`. The InfluxDB lines arrive as Prometheus metrics, so they are only queryable through that Prometheus data source. Metrics (Prometheus names = `volture_` + field):
 
@@ -337,15 +337,19 @@ Open `http://volture.local`, switch **Grafana push** on. Within 2 minutes **Graf
 | `volture_car_current_a`, `volture_car_power_kw` | What the car actually draws |
 | `volture_car_battery_pct`, `volture_car_limit_pct` | Battery and the car's charge limit |
 | `volture_sent_charging`, `volture_sent_amps`, `volture_sent_attempts` | Last command sent, and sends so far of the unconfirmed one (0: none pending) |
-| `volture_state_value{reason, event, answer, status}` | Labels: Volture's decision (`ramp`, `no_room`, `amps_cap`…), what happened to the command (`confirmed`, `resend`…), the car's answer to the last command, the car's charging status |
+| `volture_state{reason, event, answer, status}` | Labels: Volture's decision (`ramp`, `no_room`, `amps_cap`…), what happened to the command (`confirmed`, `resend`…), the car's answer to the last command, the car's charging status |
 | `volture_heap_free`, `volture_heap_block`, `volture_wifi_dbm`, `volture_ble_dbm` | ESP32 health |
 
-Suggested dashboard (*Dashboards → New → Add visualization*, one panel per row):
-- **Power:** `volture_house_w` with a threshold line at 4600.
-- **Amps:** `volture_amps`, `volture_car_amps`, `volture_car_current_a`, `volture_sent_amps`.
-- **Decisions:** *State timeline* of `volture_state_value`, legend `{{reason}}`; a second one with `{{answer}}` shows each command's answer from the car.
-- **Health:** `volture_heap_block` (below ~10000 means pushes are getting risky), `volture_ble_dbm`, `volture_wifi_dbm`.
-- **Alert** (optional, *Alerting → New alert rule*): `max_over_time(volture_house_w[5m]) > 4600` → notification to your phone (Grafana's mobile app or e-mail).
+**6. The dashboard:** `grafana/volture-dashboard.json` is a ready-made dashboard, phone-first (one panel per row):
+- **Now:** house power (*No Shelly* until one is installed), current the car draws, amps Volture decided, battery.
+- **Power vs contract:** house and car power, with the 4,370 W working ceiling (orange) and 4,600 W contract (red).
+- **Amps:** Volture's decision, the car's setting, what the car draws, the last command sent, the house's total current; red line at the 20 A cap.
+- **Volture decision**, and **Car status and answer to the last command**: timelines of the labels on `volture_state`.
+- **Charging, cable, control**; **Battery** vs the car's charge limit; **ESP32 health** (memory, Wi-Fi, Bluetooth).
+
+Import it: in your Grafana, **Dashboards** → **New** → **Import** → *Upload dashboard JSON file* → pick `grafana/volture-dashboard.json` → **Import**. It opens as *Volture* (`https://<stack>.grafana.net/d/volture/volture`). After changing it in Grafana, export it back (*Share* → *Export* → *Save to file*) over this file so the repository stays the source.
+
+**Optional alert:** *Alerting* → *Alert rules* → *New alert rule*, query `max_over_time(volture_house_w[5m]) > 4600`, contact point your e-mail or the Grafana mobile app.
 
 ### Troubleshooting
 

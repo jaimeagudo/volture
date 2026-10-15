@@ -12,6 +12,7 @@ from typing import Optional
 
 from aioesphomeapi import (APIClient, BinarySensorState, NumberState, ReconnectLogic, SensorState,
                            SwitchState, TextSensorState)
+from zeroconf.asyncio import AsyncZeroconf
 
 from .confirm import CarState
 from .controller import Command
@@ -26,6 +27,8 @@ LIMIT_ENTITY = "charging_limit"       # number: the car's charge limit (%)
 STATUS_ENTITY = "charging"            # text: Charging, Complete, Disconnected... (logged only)
 LAST_COMMAND_ENTITY = "last_command"  # text: firmware's outcome of the last BLE command (logged only)
 LOGGED_TEXTS = (STATUS_ENTITY, LAST_COMMAND_ENTITY)
+# State types Volture reads. Others (covers, climate, locks...) have no single `.state` value: ignored.
+READ_STATES = (BinarySensorState, NumberState, SensorState, SwitchState, TextSensorState)
 ESPHOME_API_PORT = 6053
 
 log = logging.getLogger("volture.car")
@@ -39,22 +42,29 @@ class EsphomeCar:
         self.keys: dict[str, int] = {}
         self.states: dict[tuple[type, int], object] = {}  # (state type, key) -> value; absent = unknown
         self.reconnect: Optional[ReconnectLogic] = None
+        self.zeroconf: Optional[AsyncZeroconf] = None
 
     async def start(self) -> None:
-        self.client = APIClient(self.host, ESPHOME_API_PORT, None, noise_psk=self.noise_psk)
+        # One mDNS (zeroconf) instance for the whole run. Without it, aioesphomeapi 46.3.0 (pinned by
+        # esphome) adds its reconnect listener to one instance and removes it from a new one whenever
+        # resolving volture.local takes > 2 s: the connection then hangs and stop() raises KeyError.
+        self.zeroconf = AsyncZeroconf()
+        self.client = APIClient(self.host, ESPHOME_API_PORT, None, noise_psk=self.noise_psk,
+                                zeroconf_instance=self.zeroconf)
         self.reconnect = ReconnectLogic(client=self.client, on_connect=self._on_connect,
-                                        on_disconnect=self._on_disconnect, name="volture-esp32")
+                                        on_disconnect=self._on_disconnect)
         await self.reconnect.start()
 
     async def stop(self) -> None:
-        if self.reconnect is not None:
-            await self.reconnect.stop()
-        if self.client is None:
-            return
         try:
-            await self.client.disconnect(force=True)
-        except Exception:  # already closed
-            pass
+            if self.reconnect is not None:
+                await self.reconnect.stop()
+            if self.client is not None:
+                await self.client.disconnect(force=True)
+        except Exception as e:  # shutting down anyway: never mask the reason we are stopping
+            log.warning("ESP32 disconnect: %r", e)
+        if self.zeroconf is not None:
+            await self.zeroconf.async_close()
 
     async def _on_connect(self) -> None:
         try:
@@ -78,6 +88,8 @@ class EsphomeCar:
         log.warning("ESP32 disconnected")
 
     def _on_state(self, state) -> None:
+        if not isinstance(state, READ_STATES):
+            return
         slot = (type(state), state.key)
         if getattr(state, "missing_state", False):
             self.states.pop(slot, None)

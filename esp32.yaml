@@ -22,6 +22,9 @@ packages:
 esphome:
   name: volture
   friendly_name: volture
+  includes:  # Volture's control loop, see the end of this file
+    - esp32/controller.h
+    - esp32/device.h
 
 # The firmware defaults to DRIVER (unlock, open trunk...). volture only needs charging,
 # so the paired key gets the least-privileged role. Changing it later requires re-pairing.
@@ -47,3 +50,162 @@ wifi:
 # Put that MAC in secrets.yaml (ble_mac_address), comment this block again and reflash.
 # tesla_ble_listener:
 #   vin: !secret tesla_vin
+
+# ---- Volture's control loop, running on the ESP32 itself ----
+# Every 5 s: read the Shelly, read the car's state, run one cycle of esp32/controller.h (volture::Loop),
+# send what it decides. With "Volture control" off (the default) it only shows what it would do.
+
+globals:
+  - id: shelly_body  # last /emeter/0 reply; empty = no reading this cycle
+    type: std::string
+
+http_request:
+  timeout: 2s        # the Shelly is on the LAN: a slow reply is treated as no reading
+  verify_ssl: true   # HTTPS (the "HTTPS test" button) checks certificates with ESP-IDF's bundle
+
+web_server:
+  port: 80
+  version: 3
+  auth:
+    username: volture
+    password: !secret web_password
+
+debug:
+  update_interval: 5s
+
+switch:
+  - platform: template
+    id: volture_control
+    name: Volture control
+    icon: mdi:car-electric
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF  # off until switched on; then kept across reboots
+
+text:
+  - platform: template
+    id: shelly_url
+    name: Shelly URL
+    mode: text
+    optimistic: true
+    restore_value: true
+    initial_value: !secret shelly_url
+
+sensor:
+  - platform: template
+    id: house_power
+    name: House power
+    unit_of_measurement: W
+    device_class: power
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: grid_voltage
+    name: Grid voltage
+    unit_of_measurement: V
+    device_class: voltage
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: volture_amps
+    name: Volture amps
+    unit_of_measurement: A
+    device_class: current
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: debug
+    free:
+      name: Heap free
+    block:
+      name: Heap largest block
+    min_free:
+      name: Heap min free
+
+text_sensor:
+  - platform: template
+    id: volture_decision
+    name: Volture decision
+    update_interval: never
+  - platform: template
+    id: volture_event
+    name: Volture event
+    update_interval: never
+
+script:
+  - id: volture_cycle
+    mode: single
+    then:
+      - lambda: |-
+          std::optional<volture::Reading> reading;
+          if (!id(shelly_body).empty()) {
+            reading = volture_device::parse_shelly(id(shelly_body));
+          }
+          auto observed = volture_device::observe();
+          auto &loop = volture_device::loop();
+          auto cycle = loop.step(volture_device::now_s(), reading, observed, id(volture_control).state);
+          std::string sent = cycle.dry_run ? "would send: " : "";
+          for (const auto &cmd : {cycle.resend, cycle.command}) {
+            if (!cmd) {
+              continue;
+            }
+            sent += cmd->charging ? (std::to_string(cmd->amps) + " A ") : std::string("stop ");
+            if (!cycle.dry_run && !volture_device::send(*cmd)) {
+              ESP_LOGW("volture", "car entities not found: command not sent");
+            }
+          }
+          const bool valid = reading && reading->valid;
+          id(house_power).publish_state(valid ? reading->power_w : NAN);
+          id(grid_voltage).publish_state(valid && reading->voltage_v ? *reading->voltage_v : NAN);
+          id(volture_amps).publish_state(loop.ctrl.charging ? loop.ctrl.amps : 0);
+          const std::string decision = std::string(loop.ctrl.reason) + (sent == "would send: " ? "" : " · " + sent);
+          if (id(volture_decision).state != decision) {
+            id(volture_decision).publish_state(decision);
+          }
+          if (id(volture_event).state != cycle.event) {
+            id(volture_event).publish_state(cycle.event);
+          }
+          // One key=value line per cycle (InfluxDB line protocol fields), for logs and remote storage later.
+          ESP_LOGI("volture", "volture power_w=%.0f,valid=%d,car_charging=%d,car_amps=%d,amps=%d,control=%d,reason=\"%s\",event=\"%s\"",
+                   reading ? reading->power_w : -1.0, valid, observed ? observed->charging : -1,
+                   observed ? observed->amps : -1, loop.ctrl.amps, id(volture_control).state, loop.ctrl.reason, cycle.event);
+
+interval:
+  - interval: 5s
+    then:
+      - http_request.get:
+          url: !lambda return id(shelly_url).state + "/emeter/0";
+          capture_response: true
+          on_response:
+            then:
+              - lambda: |-
+                  id(shelly_body) = response->status_code == 200 ? body : std::string();
+              - script.execute: volture_cycle
+          on_error:
+            then:
+              - lambda: id(shelly_body) = std::string();
+              - script.execute: volture_cycle
+
+button:
+  # Measures what HTTPS costs in memory while Bluetooth is connected to the car (option B: pushing
+  # data to a cloud service). Sends nothing but an empty GET to Google; read the result in the log.
+  - platform: template
+    name: HTTPS test
+    icon: mdi:lock-check
+    on_press:
+      - lambda: |-
+          ESP_LOGI("volture", "https test: before free=%u largest=%u min_ever=%u",
+                   heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+                   heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
+      - http_request.get:
+          url: https://www.google.com/generate_204
+          on_response:
+            then:
+              - lambda: |-
+                  ESP_LOGI("volture", "https test: status=%d after free=%u largest=%u min_ever=%u",
+                           response->status_code, heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                           heap_caps_get_largest_free_block(MALLOC_CAP_8BIT),
+                           heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));
+          on_error:
+            then:
+              - lambda: |-
+                  ESP_LOGW("volture", "https test: failed, free=%u min_ever=%u",
+                           heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT));

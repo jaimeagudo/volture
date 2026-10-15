@@ -16,7 +16,7 @@ A **Shelly EM** clamp on the main feed measures what the whole house draws. Ever
 
 | Piece                                        | State                                                                                                                                                |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Control algorithm + tests                    | Done in Python and in C++ (`esp32/controller.h`); the same 21 scenarios pass on both; every setting in `secrets.yaml`                               |
+| Control algorithm + tests                    | Done in Python and in C++ (`esp32/controller.h`); the same 22 scenarios pass on both; every setting in `secrets.yaml`                               |
 | Control loop running on the ESP32 itself     | **Planned:** read the Shelly and drive the car from the ESP32, so no other machine is needed. Until then, run `volture.main` on a Mac              |
 | Simulator (fake Shelly + fake car, web page) | Done, run end to end                                                                                                                                 |
 | ESP32 firmware                               | Built from `esp32.yaml`, flashed, on Wi-Fi as `volture.local`                                                                                        |
@@ -69,22 +69,22 @@ Runs every `poll_s` with the Shelly reading (`power`, `voltage`, `is_valid`). Th
 | Already at 5 A and power > 4,600 W                                         | Stop charging                                                                                  |
 | Charging and power + `ramp_up_step_amps` × V ≤ 4,370 W                     | Raise `ramp_up_step_amps` (1) A, at most every `ramp_up_every_s` (15 s), up to `max_amps` (32) |
 | Otherwise while charging                                                   | Hold                                                                                           |
-| Stopped and house + 5 A × V fits under 4,370 W for `resume_after_s` (60 s) | Restart at 5 A, unless stopped from the Tesla app, unplugged, or at its battery charge limit   |
+| Stopped **by Volture** and house + 5 A × V fits under 4,370 W for `resume_after_s` (60 s) | Restart at 5 A, unless unplugged or at its battery charge limit                   |
+| Stopped by anyone else, or never started                                   | Nothing: **Volture never starts a charge**                                                     |
 | Believed stopped but power > 4,600 W                                       | Send "stop" (at most every 15 s): the car may be charging without us                           |
 | Shelly unreachable or `is_valid: false`                                    | Drop to 5 A; after `stop_after_invalid_s` (30 s), stop                                         |
 
 
-**The Tesla app has priority.** Volture listens to the car's reported state through the ESP32: charging on/off, amps, cable connected, battery % and charge limit %. A change the car reports that is *not* what Volture asked for came from outside (the Tesla app, or the car itself), and Volture follows it:
+**You start and stop; Volture sets the amps.** Charging is always started by you: from the Tesla app, or by the car's own schedule. Volture listens to the car's reported state through the ESP32 (charging on/off, amps, cable connected, battery % and charge limit %). A change it did not ask for came from outside, and:
 
-| Outside change                                              | What Volture does                                                     |
-| ----------------------------------------------------------- | --------------------------------------------------------------------- |
-| Charging stopped (app, or the car reached its charge limit) | Stays stopped: never restarts on its own                              |
-| Charging started, or amps changed, from the app             | Follows it; never ramps above those amps |
-| Cable unplugged                                             | Clears the above: the next session is Volture's again                 |
+| Outside change                                                          | What Volture does                                                         |
+| ----------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Charging started (app, schedule), or amps changed in the app            | Takes over: raises the amps to everything that fits under the contracted power |
+| Charging stopped (app, schedule, or the car reached its charge limit)   | Stays stopped                                                             |
 
-The house's contracted power still wins over the app: a 32 A charge started from the app is cut to what fits under 4,600 W.
+The house's contracted power wins over the app: a 32 A charge started from the app is cut to what fits under 4,600 W.
 
-Volture never sends "start" while the car is unplugged or its battery is at or above its charge limit; the car would refuse anyway.
+When Volture restarts a charge it stopped itself, it skips it while the car is unplugged or its battery is at or above its charge limit; the car would refuse anyway.
 
 - **Confirming commands:** after each command Volture waits `confirm_timeout_s` (15 s) for the car to report it. If not, it re-sends, up to `confirm_max_attempts` (3) sends in total; after that it adopts what the car reports.
 - **Logged only:** the firmware's status text (`charging`: Charging, Complete, Disconnected…) and `last_command`. Their wording may change between firmware releases, so decisions use the structured values.
@@ -93,7 +93,7 @@ Volture never sends "start" while the car is unplugged or its battery is at or a
 
 - **No trustworthy reading → charge less, then stop.** The controller never keeps commanding power blind.
 - **A failed or unconfirmed command is logged and re-sent; the loop never stops reading power.** A command gives up after `car_command_timeout_s` (10 s), and the ESP32 connection is kept alive in the background.
-- **A stop from the Tesla app is permanent** until you start charging from the app again or unplug the cable.
+- **A stop from the Tesla app is permanent** until you start charging again (app or schedule).
 
 ---
 
@@ -159,12 +159,23 @@ Terminal 1, the fake Shelly and car:
 uv run python -m simulator.server
 ```
 
-Terminal 2, the controller with the simulated car (`--car sim` is only needed until `secrets.yaml` says `car: sim`, step 4):
+Terminal 2, the controller with the simulated Shelly and car:
 ```bash
-uv run python -m volture.main --car sim
+uv run python -m volture.main --sim-shelly --sim-car
 ```
 
-After 60 s charging starts at 5 A, then rises 1 A every 15 s.
+Nothing happens until you start charging: on the page, **Start charging** (the Tesla app's button). Volture then raises the amps 1 A every 15 s up to what fits.
+
+Each piece is simulated independently; no flag means real hardware:
+
+| Command                                        | Shelly                        | Car                     |
+| ---------------------------------------------- | ----------------------------- | ----------------------- |
+| `volture.main`                                 | real (`shelly_url`)           | real (via the ESP32)    |
+| `volture.main --sim-shelly`                    | simulator (you type the power) | real                   |
+| `volture.main --sim-car`                       | real                          | simulator               |
+| `volture.main --sim-shelly --sim-car`          | simulator                     | simulator               |
+
+The simulator is at `http://localhost:8081` by default; `--sim-url` points elsewhere (e.g. `simulator.server --port 8091` + `--sim-url http://localhost:8091`).
 
 Open **http://localhost:8081/** (from a phone: `http://<your-Mac's-IP>:8081/`, Mac IP: `ipconfig getifaddr en0`). Two sections:
 - **Shelly (house meter):** house power, presets, voltage, `is_valid`, `online`, and the exact `/emeter/0` JSON volture reads.
@@ -187,7 +198,7 @@ Stop any program with `Ctrl + C`.
 
 #### Be the Shelly while driving the real car
 
-Before the Shelly is installed, you can debug with the **real ESP32 and car**: keep `shelly_url` in `secrets.yaml` pointing at the fake Shelly, set `car: esphome`, run `simulator.server`, then `volture.main`. Nothing commands the simulated car in this mode, so the power you type is exactly what volture reads; the real car's own load is not added, so type the total you want it to see.
+Before the Shelly is installed, you can debug with the **real ESP32 and car**: run `simulator.server`, then `volture.main --sim-shelly`, plug in and start charging from the Tesla app. Leave the page's simulated car stopped: then the power you type is exactly what volture reads. The real car's own load is not added, so type the total you want it to see.
 
 ### 4. Fill in the secrets
 
@@ -203,8 +214,8 @@ cp secrets.example.yaml secrets.yaml && open -e secrets.yaml
 | `api_encryption_key`           | Encrypts Mac ↔ ESP32 traffic. Generate it with the command in the template.                                                                                                                                                                                                              |
 | `tesla_vin`                    | The car's VIN (17 characters, in the Tesla app).                                                                                                                                                                                                                                         |
 | `ble_mac_address`              | The car's Bluetooth **MAC address**, `AA:BB:CC:DD:EE:FF` (digits 0–9 and letters A–F only, so `0` is zero, never the letter `O`). See step 6.                                                                                                                                            |
-| `shelly_url`                   | Where volture reads power: `http://localhost:8081` (fake Shelly) or `http://SHELLY_IP` (real one).                                                                                                                                                                                       |
-| `volture:` block               | Every setting: `car: esphome` (real) or `sim`, `esphome_host`, the power limits, amps, steps and timings. Each line is commented in the template; a missing line keeps its default; a typo or impossible value stops volture at startup with a clear message. |
+| `shelly_url`                   | The real Shelly: `http://SHELLY_IP`. Ignored with `--sim-shelly`.                                                                                                                                                                                                                         |
+| `volture:` block               | Every setting: `esphome_host`, the power limits, amps, steps and timings. Each line is commented in the template; a missing line keeps its default; a typo or impossible value stops volture at startup with a clear message. |
 
 `secrets.yaml` is gitignored: it never reaches GitHub.
 
@@ -252,13 +263,13 @@ The key is paired with the **`CHARGING_MANAGER`** role (set in `esp32.yaml`): it
 
 ### 9. Run for real
 
-In `secrets.yaml` set `shelly_url: "http://SHELLY_IP"` and `car: esphome`, then:
+In `secrets.yaml` set `shelly_url: "http://SHELLY_IP"`, then:
 
 ```bash
 uv run python -m volture.main
 ```
 
-Everything comes from `secrets.yaml`; `--shelly-url` and `--car` override it for one run.
+Everything comes from `secrets.yaml`. Then start charging as usual (Tesla app or the car's schedule); Volture takes it from there.
 
 ### Troubleshooting
 
@@ -291,6 +302,7 @@ Everything comes from `secrets.yaml`; `--shelly-url` and `--car` override it for
 10. **Proportional drop:** one step of ⌈(P − 4,370) / V⌉ A corrects a big spike at once instead of 1 A per cycle.
 11. **Confirm with the car's state, not `last_command` text:** the switch/amps states are structured; `last_command` is firmware prose that may change between releases.
 12. **No time-based charging, ever** (decided 2026-10-15). Volture has no schedule, off-peak window or clock-based rule. The car itself or the owner (Tesla app) decide when to charge, and whether the cable is plugged in. A schedule in Volture would duplicate the car's own scheduling: a second source of truth that drifts. Volture only keeps the house under its contracted power and follows the Tesla app.
+13. **Volture never starts a charge** (decided 2026-10-15). The owner starts it (Tesla app or the car's schedule); Volture then uses every amp that fits under the contracted power, whatever amps the app set. The only exception: a charge Volture itself stopped to protect the contracted power (or for lack of Shelly readings) is resumed once there is room again; otherwise one spike at night would end the whole night's charge. Which pieces are simulated is chosen per run with `--sim-shelly` / `--sim-car`, not in `secrets.yaml`.
 
 ---
 

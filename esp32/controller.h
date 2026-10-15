@@ -58,22 +58,15 @@ class Controller {
 
   bool charging = false;
   int amps = 0;
-  // The Tesla app has priority. user_paused: stopped from the app, never restart on our own.
-  // user_amps: started / set from the app: never ramp above it.
-  bool user_paused = false;
-  std::optional<int> user_amps;
+  // True only after Volture itself stopped a charge (power over the limit, no reading):
+  // the one case where it may start the car again.
+  bool paused_by_us = false;
 
-  // A change made outside Volture (Tesla app, the car itself): follow it from now on.
+  // A change made outside Volture (Tesla app, schedule, the car itself): take it as is.
+  // A start is taken over (amps rise to whatever fits); a stop stays a stop.
   void follow_user(bool car_charging, int car_amps) {
     adopt(car_charging, car_amps);
-    user_paused = !car_charging;
-    user_amps = car_charging ? std::optional<int>(car_amps) : std::nullopt;
-  }
-
-  // Cable unplugged: the next charging session is Volture's again.
-  void clear_user() {
-    user_paused = false;
-    user_amps.reset();
+    paused_by_us = false;
   }
 
   // Align the controller's belief with the car's reported state.
@@ -87,7 +80,6 @@ class Controller {
   // car_can_charge: false when the car is unplugged or at its battery charge limit.
   std::optional<Command> tick(double now, const std::optional<Reading> &reading, bool car_can_charge = true) {
     const Config &c = cfg_;
-    const int max_amps = user_amps ? std::min(c.max_amps, *user_amps) : c.max_amps;
     if (!reading || !reading->valid) {
       low_since_.reset();
       if (!invalid_since_) {
@@ -97,7 +89,7 @@ class Controller {
         return std::nullopt;
       }
       if (now - *invalid_since_ >= c.stop_after_invalid_s) {
-        return stop_(now);
+        return stop_(now, true);
       }
       if (amps > c.min_amps) {
         return set_(c.min_amps, now);
@@ -111,16 +103,17 @@ class Controller {
     if (!charging) {
       // Over the contracted power while we believe the car is stopped: the car may be charging
       // without us. A stop to an idle car is harmless, so send one, at most every ramp_up_every_s.
+      // Not resumable: Volture never starts a charge it did not know about.
       if (p > c.contracted_power_w) {
         low_since_.reset();
         if (now - last_change_ >= c.ramp_up_every_s) {
-          return stop_(now);
+          return stop_(now, paused_by_us);
         }
         return std::nullopt;
       }
-      // Restart only if not stopped from the app, the car can take charge, and
+      // Restart only a charge Volture stopped itself, if the car can take charge and
       // house + minimum charge fits the ceiling.
-      if (!user_paused && car_can_charge && p + c.min_amps * volts <= c.working_limit_w()) {
+      if (paused_by_us && car_can_charge && p + c.min_amps * volts <= c.working_limit_w()) {
         if (!low_since_) {
           low_since_ = now;
         }
@@ -139,7 +132,7 @@ class Controller {
       int target = amps - delta;
       if (target < c.min_amps) {
         if (amps == c.min_amps && p > c.contracted_power_w) {
-          return stop_(now);
+          return stop_(now, true);
         }
         target = c.min_amps;
       }
@@ -149,7 +142,7 @@ class Controller {
       return std::nullopt;
     }
 
-    const int step = std::min(c.ramp_up_step_amps, max_amps - amps);
+    const int step = std::min(c.ramp_up_step_amps, c.max_amps - amps);
     if (step > 0 && p + step * volts <= c.working_limit_w() && now - last_change_ >= c.ramp_up_every_s) {
       return set_(amps + step, now);
     }
@@ -160,13 +153,16 @@ class Controller {
   Command set_(int new_amps, double now) {
     charging = true;
     amps = new_amps;
+    paused_by_us = false;
     last_change_ = now;
     return Command{true, new_amps};
   }
 
-  Command stop_(double now) {
+  // resumable: Volture stopped a charge it knew of, so it may restart it later.
+  Command stop_(double now, bool resumable) {
     charging = false;
     amps = 0;
+    paused_by_us = resumable;
     last_change_ = now;
     return Command{false, 0};
   }

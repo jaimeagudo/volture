@@ -449,33 +449,33 @@ GPL-3.0. Copyright (C) 2026 Jaime Agudo, [github.com/jaimeagudo/volture](https:/
 
 ## FAQ
 
-# so can I update through my lan without going to the garage from now on?
+### Do I need the USB cable again to update the ESP32?
 
-Yes. Every update since the first USB flash went over Wi-Fi from your Mac, including the one a few minutes ago. I only disabled uploads through the web page; the encrypted update path that esphome uses is untouched. From the repo on your Mac, on your home network:
+No. After the first flash over USB, every update goes over Wi-Fi, encrypted with `api_encryption_key` from `secrets.yaml`. From the repository, on the same network as the ESP32:
 
+```bash
 uv run esphome run esp32.yaml --device volture.local
+```
 
-If volture.local doesn't resolve, use its IP instead: --device 192.168.0.113, shown on its page under "IP Address".
+If `volture.local` does not resolve, use the ESP32's IP address instead (`--device 192.168.x.y`; your router lists it). Updates through the web page are disabled on purpose.
 
-When you'd still need the garage and the USB cable:
-- A firmware that can't join Wi-Fi: for example a wrong Wi-Fi password in secrets.yaml, or a router change. If you change your Wi-Fi password, put the new one in secrets.yaml as the second network (wifi2_ssid/wifi2_password) and flash while the old one still works. Then the ESP32 knows both.
-- A firmware that keeps crashing at startup: after several failed boots the ESP32 starts in a minimal safe mode that still accepts Wi-Fi updates (your log shows that safs usually doesn't need USB either; just flash afixed version.
-- The update key in secrets.yaml changing: if apthe Mac and the ESP32 no longer share a key. Keepthat file safe.
+You still need the cable when:
 
-The car keeps charging at its current amps during the roughly 30 seconds the ESP32 takes to restart after an update.
+- **The new firmware cannot join your Wi-Fi** (wrong password in `secrets.yaml`, router replaced). To change the Wi-Fi password safely, add the new network as `wifi2_ssid` / `wifi2_password` and flash while the old one still works: the ESP32 then knows both.
+- **`api_encryption_key` changes:** the computer and the ESP32 no longer share the key. Keep `secrets.yaml` safe and backed up.
 
-[No changes; master @ 1d127ee]
+A firmware that keeps crashing at startup does not need the cable: after 10 quick restarts in a row the ESP32 starts in a minimal safe mode that still accepts Wi-Fi updates, so you can flash a fixed version.
 
-✻ Worked for 11s · done 12:37 AM
+The car keeps charging at its current amps while the ESP32 restarts after an update (about 10 seconds).
 
-# how does the hostname volture resolves? it's not static ip, is it ?
+### How does `volture.local` find the ESP32 if its IP address can change?
 
-It's not a static IP. Two mechanisms are involved:
+The IP address comes from your router (DHCP) and can change. The name works anyway thanks to **mDNS** (multicast DNS, Apple's "Bonjour"): the ESP32 announces "I am volture, at this IP" on the local network, with no DNS server involved.
 
-1. The IP comes from your router (DHCP) and can change. It already has: earlier tonight the ESP32 was at 192.168.0.209, now it's at 192.168.0.113.
-2. volture.local is found by mDNS (multicast DNS, Apple's "Bonjour"). There's no DNS server involved. The ESP32 announces       "I'm volture, at this IP" on your home networr volture.local get the current IP. So the namekeeps working when the IP changes.                                                                                       
-Where .local works:                                                                                                          - Macs and iPhones: yes.
-- Android: Chrome on recent versions usually works; some apps and older phones don't.                                        - Only the network the ESP32 is on: mDNS doesn'ttworks (for example a guest Wi-Fi, or your twoWi-Fi networks if the router keeps them apart) or over a VPN.                                                             
-My recommendation: reserve its IP in your router (often called "DHCP reservation" or "static lease"). The router then always gives the ESP32 the same address, e.g. 192.168.0erywhere .local doesn't.
-                                                                                                                             Fixing the IP on the ESP32 itself (ESPHome's mane router could hand that address to anotherdevice, and it breaks if you change routers. The router reservation has neither problem.                                    
-Do the same for the Shelly EM when you install it. Its address goes into Shelly EM URL, and the ESP32 reads it by IP every second, so it must not change.
+- **Macs and iPhones:** `.local` names work.
+- **Android:** recent Chrome versions usually work; some apps and older phones do not.
+- **Only on the ESP32's own network:** mDNS does not cross separate networks (a guest Wi-Fi, two Wi-Fi networks the router keeps apart) or VPNs.
+
+**Recommended:** reserve the ESP32's address in your router ("DHCP reservation" or "static lease"). The router then always gives it the same IP, which works everywhere `.local` does not. This is better than a fixed IP set on the ESP32 itself, which the router could hand to another device and which breaks if you change routers.
+
+Do the same for the **Shelly EM**: the ESP32 reads it by IP address every second (**Shelly EM URL** on the page), so that address must not change.

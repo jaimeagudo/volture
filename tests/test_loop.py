@@ -66,8 +66,8 @@ def test_takes_over_an_app_start_and_ramps_to_the_ceiling(cli):
     world.car.force(Command(True, 5))
     device = Device(cli, world)
     device.run(600)
-    assert world.car.amps == 16                         # (4370 - 650) / 230 = 16.2
-    assert world.total_w(device.t) <= 4370
+    assert world.car.amps == 17                         # default headroom 0: (4600 - 650) / 230 = 17.2
+    assert world.total_w(device.t) <= 4600
     assert any(event == "confirmed" for _, event, _, _ in device.cycles)
 
 

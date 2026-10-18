@@ -19,14 +19,17 @@ constexpr double PLAUSIBLE_VOLTAGE_MAX_V = 260.0;
 
 struct Config {
   double contracted_power_w = 4600.0;  // utility limit (20 A at 230 V): never exceed
-  double headroom_w = 230.0;           // margin below it for loads that switch on between readings
+  double headroom_w = 0.0;             // margin below it for loads that switch on between readings
   double fallback_voltage_v = 230.0;   // used when the Shelly gives no plausible voltage
   int min_amps = 5;                    // lowest current the car accepts
   int max_amps = 32;                   // charger / car maximum
   int ramp_up_step_amps = 1;           // amps added per ramp-up step
   double ramp_up_every_s = 15.0;       // minimum time between ramp-up steps
   double resume_after_s = 60.0;        // power must stay low this long before restarting
-  double stop_after_invalid_s = 30.0;  // no trustworthy reading for this long -> stop
+  double stop_after_invalid_s = 30.0;  // no trustworthy reading for this long -> stop (if stop_without_reading)
+  // Without a trustworthy reading: false (default) sends nothing, the car carries on as it is (a faulty
+  // Shelly must never stop a charge); true drops to min_amps, then stops after stop_after_invalid_s.
+  bool stop_without_reading = false;
 
   double working_limit_w() const { return contracted_power_w - headroom_w; }
 };
@@ -55,6 +58,9 @@ inline double effective_voltage(const Config &cfg, const Reading &reading) {
 class Controller {
  public:
   explicit Controller(Config cfg = Config()) : cfg_(cfg) {}
+
+  // New settings (the web page's); the controller's state is kept.
+  void configure(const Config &cfg) { cfg_ = cfg; }
 
   bool charging = false;
   int amps = 0;
@@ -90,6 +96,9 @@ class Controller {
       }
       if (!charging) {
         return because_("no_reading_idle", std::nullopt);
+      }
+      if (!c.stop_without_reading) {
+        return because_("no_reading_hold", std::nullopt);
       }
       if (now - *invalid_since_ >= c.stop_after_invalid_s) {
         return because_("no_reading_stop", stop_(now, true));

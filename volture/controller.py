@@ -20,14 +20,17 @@ PLAUSIBLE_VOLTAGE_V = (180.0, 260.0)
 @dataclass(frozen=True)
 class Config:
     contracted_power_w: float = 4600.0  # utility limit (20 A at 230 V): never exceed
-    headroom_w: float = 230.0           # margin below it for loads that switch on between readings
+    headroom_w: float = 0.0             # margin below it for loads that switch on between readings
     fallback_voltage_v: float = 230.0   # used when the Shelly gives no plausible voltage
     min_amps: int = 5                   # lowest current the car accepts
     max_amps: int = 32                  # charger / car maximum
     ramp_up_step_amps: int = 1          # amps added per ramp-up step
     ramp_up_every_s: float = 15.0       # minimum time between ramp-up steps
     resume_after_s: float = 60.0        # power must stay low this long before restarting
-    stop_after_invalid_s: float = 30.0  # no trustworthy reading for this long -> stop
+    stop_after_invalid_s: float = 30.0  # no trustworthy reading for this long -> stop (if stop_without_reading)
+    # Without a trustworthy reading: False (default) sends nothing, the car carries on as it is (a faulty
+    # Shelly must never stop a charge); True drops to min_amps, then stops after stop_after_invalid_s.
+    stop_without_reading: bool = False
 
     @property
     def working_limit_w(self) -> float:
@@ -99,7 +102,7 @@ class Controller:
             self.low_since = None
             if self.invalid_since is None:
                 self.invalid_since = now
-            if not self.charging:
+            if not self.charging or not c.stop_without_reading:
                 return None
             if now - self.invalid_since >= c.stop_after_invalid_s:
                 return self._stop(now, resumable=True)

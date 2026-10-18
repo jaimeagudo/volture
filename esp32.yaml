@@ -7,6 +7,8 @@
 # Secrets come from ./secrets.yaml (gitignored, template: secrets.example.yaml).
 
 substitutions:
+  # The volture: block of secrets.yaml (settings of the control loop), e.g. ${volture_settings.poll_s}.
+  volture_settings: !secret volture
   # Firmware release. Each release states the minimum ESPHome version; keep pyproject.toml in sync.
   tesla_ble_ref: v2026.10.1
   ble_mac_address: !secret ble_mac_address
@@ -41,7 +43,21 @@ esphome:
     then:
       - lambda: |-
           volture_device::arrange_page(id(web_ui));
-          id(contracted_power).publish_state(volture_device::config().contracted_power_w);
+          // secrets.yaml's volture: block -> this device's settings (before the loop's first use).
+          auto &cfg = volture_device::config();
+          cfg.contracted_power_w = ${volture_settings.contracted_power_w};
+          cfg.headroom_w = ${volture_settings.headroom_w};
+          cfg.fallback_voltage_v = ${volture_settings.fallback_voltage_v};
+          cfg.min_amps = ${volture_settings.min_amps};
+          cfg.max_amps = ${volture_settings.max_amps};
+          cfg.ramp_up_step_amps = ${volture_settings.ramp_up_step_amps};
+          cfg.ramp_up_every_s = ${volture_settings.ramp_up_every_s};
+          cfg.resume_after_s = ${volture_settings.resume_after_s};
+          cfg.stop_after_invalid_s = ${volture_settings.stop_after_invalid_s};
+          cfg.stop_without_reading = volture_device::flag("${volture_settings.stop_without_reading}");
+          volture_device::loop_settings().confirm_timeout_s = ${volture_settings.confirm_timeout_s};
+          volture_device::loop_settings().confirm_max_attempts = ${volture_settings.confirm_max_attempts};
+          id(contracted_power).publish_state(cfg.contracted_power_w);
 
 # A browser page left open but not read (a phone with the tab in the background) keeps its TCP
 # connection alive, and lwIP holds up to TCP_SND_BUF of unsent data for it until the phone closes it.
@@ -148,6 +164,15 @@ switch:
     restore_mode: RESTORE_DEFAULT_OFF  # off until switched on; then kept across reboots
     on_turn_off:
       - lambda: volture_device::telemetry() = volture_device::Telemetry();  # free the buffer
+  # Off (default): without a Shelly reading Volture sends nothing; the car carries on as it is.
+  # On: it drops to min_amps, then stops after "Stop after no reading".
+  - platform: template
+    id: stop_without_shelly
+    name: Stop without Shelly
+    web_server: {sorting_group_id: volture_settings, sorting_weight: 2.3}
+    icon: mdi:power-plug-off-outline
+    optimistic: true
+    restore_mode: ${ 'RESTORE_DEFAULT_ON' if volture_settings.stop_without_reading else 'RESTORE_DEFAULT_OFF' }
   - platform: template
     id: volture_control
     name: Control
@@ -155,6 +180,47 @@ switch:
     icon: mdi:car-electric
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF  # off until switched on; then kept across reboots
+
+number:
+  - platform: template
+    id: poll_interval
+    name: Poll interval
+    web_server: {sorting_group_id: volture_settings, sorting_weight: 2.1}
+    icon: mdi:timer-sync-outline
+    unit_of_measurement: s
+    mode: box
+    min_value: 1
+    max_value: 60
+    step: 1
+    optimistic: true
+    restore_value: true  # first boot: poll_s from secrets.yaml; then the page's value
+    initial_value: ${volture_settings.poll_s}
+  - platform: template
+    id: headroom
+    name: Headroom
+    web_server: {sorting_group_id: volture_settings, sorting_weight: 2.2}
+    icon: mdi:arrow-collapse-down
+    unit_of_measurement: W
+    mode: box
+    min_value: 0
+    max_value: 2000
+    step: 10
+    optimistic: true
+    restore_value: true  # first boot: headroom_w from secrets.yaml
+    initial_value: ${volture_settings.headroom_w}
+  - platform: template
+    id: stop_after_invalid
+    name: Stop after no reading
+    web_server: {sorting_group_id: volture_settings, sorting_weight: 2.4}
+    icon: mdi:timer-off-outline
+    unit_of_measurement: s
+    mode: box
+    min_value: 5
+    max_value: 600
+    step: 5
+    optimistic: true
+    restore_value: true  # first boot: stop_after_invalid_s from secrets.yaml
+    initial_value: ${volture_settings.stop_after_invalid_s}
 
 text:
   - platform: template
@@ -344,6 +410,15 @@ script:
                                                  volture_device::car_amps(observed, loop.ctrl));
             measured = volture_device::reading_of(*shelly, true, 0);
           }
+          auto settings = volture_device::config();  // secrets.yaml, then the page's settings on top
+          if (!std::isnan(id(headroom).state)) {
+            settings.headroom_w = id(headroom).state;
+          }
+          if (!std::isnan(id(stop_after_invalid).state)) {
+            settings.stop_after_invalid_s = id(stop_after_invalid).state;
+          }
+          settings.stop_without_reading = id(stop_without_shelly).state;
+          loop.ctrl.configure(settings);
           auto cycle = loop.step(volture_device::now_s(), reading, observed, id(volture_control).state);
           std::string sent = cycle.dry_run ? "would send: " : "";
           for (const auto &cmd : {cycle.resend, cycle.command}) {
@@ -413,20 +488,25 @@ script:
           }
 
 interval:
-  - interval: 1s  # the Shelly EM refreshes its reading more than once a second
+  # Every second, the Shelly is read once Poll interval (poll_s) has passed.
+  - interval: 1s
     then:
-      - http_request.get:
-          url: !lambda return id(shelly_url).state + "/emeter/0";
-          capture_response: true
-          on_response:
-            then:
-              - lambda: |-
-                  id(shelly_body) = response->status_code == 200 ? body : std::string();
-              - script.execute: volture_cycle
-          on_error:
-            then:
-              - lambda: id(shelly_body) = std::string();
-              - script.execute: volture_cycle
+      - if:
+          condition:
+            lambda: return volture_device::poll_due(id(poll_interval).state);
+          then:
+            - http_request.get:
+                url: !lambda return id(shelly_url).state + "/emeter/0";
+                capture_response: true
+                on_response:
+                  then:
+                    - lambda: |-
+                        id(shelly_body) = response->status_code == 200 ? body : std::string();
+                    - script.execute: volture_cycle
+                on_error:
+                  then:
+                    - lambda: id(shelly_body) = std::string();
+                    - script.execute: volture_cycle
   # Grafana push: the lines buffered since the last push, once a minute, while "Grafana push" is on,
   # and only with enough free memory for HTTPS (esp32/device.h, memory_for_push).
   - interval: 60s

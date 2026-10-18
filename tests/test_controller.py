@@ -7,8 +7,13 @@ from volture.controller import Command, Config, Reading
 from simulator.model import World
 
 
+# The scenarios below were written for a 230 W headroom and the no-reading fail-safe on; the product
+# defaults (Config()) are 0 W and off. Tests of those defaults pass Config() explicitly.
+CFG = Config(headroom_w=230, stop_without_reading=True)
+
+
 class Harness:
-    def __init__(self, backend, base_w=650.0, cfg=None, voltage_v=230.0):
+    def __init__(self, backend, base_w=650.0, cfg=CFG, voltage_v=230.0):
         self.world, self.ctrl, self.t = World(base_w=base_w, voltage_v=voltage_v), backend.Controller(cfg), 0.0
         self.totals = []
 
@@ -119,8 +124,30 @@ def test_shelly_offline_fails_safe(backend):
     assert not h.car.charging
 
 
+def test_by_default_a_faulty_shelly_never_touches_the_charge(backend):
+    h = Harness(backend, 650, Config())
+    h.start_from_app()
+    h.run(400)
+    amps = h.car.amps
+    h.world.shelly_valid = False
+    h.run(120)
+    assert h.car.charging and h.car.amps == amps   # no drop, no stop: the car carries on
+    h.world.shelly_valid = True
+    h.world.shelly_online = False
+    h.run(120)
+    assert h.car.charging and h.car.amps == amps
+
+
+def test_default_headroom_is_zero(backend):
+    h = Harness(backend, 650, Config())
+    h.start_from_app()
+    h.run(400)
+    assert h.car.amps == 17                    # (4600 - 650) / 230 = 17.2
+    assert h.total() <= 4600
+
+
 def test_resume_waits_after_adopting(backend):
-    ctrl = backend.Controller()
+    ctrl = backend.Controller(CFG)
     ctrl.follow_user(True, 5)
     assert ctrl.tick(0, Reading(5000)) == Command(False, 0)   # over the limit at 5 A: stop
     ctrl.tick(10, Reading(650))                # low power: resume timer starts
@@ -131,21 +158,21 @@ def test_resume_waits_after_adopting(backend):
 
 def test_never_above_contract_even_if_the_reading_misses_the_car(backend):
     # A Shelly reading stuck at 650 W (e.g. it does not see the car): 4600 W / 230 V = 20 A, never more.
-    ctrl = backend.Controller()
+    ctrl = backend.Controller(CFG)
     ctrl.follow_user(True, 5)
     amps = [cmd.amps for t in range(0, 3000, 5) if (cmd := ctrl.tick(t, Reading(650))) is not None]
     assert max(amps) == 20
 
 
 def test_app_start_above_contract_is_cut(backend):
-    ctrl = backend.Controller()
+    ctrl = backend.Controller(CFG)
     ctrl.follow_user(True, 32)                 # 32 A from the app, reading misses the car
     assert ctrl.tick(0, Reading(650)) == Command(True, 20)
 
 
 def test_settings_drive_the_algorithm(backend):
     # A 3.45 kW contract, 2 A steps, 16 A charger: same algorithm, different installation.
-    cfg = Config(contracted_power_w=3450, headroom_w=230, max_amps=16, ramp_up_step_amps=2)
+    cfg = replace(CFG, contracted_power_w=3450, max_amps=16, ramp_up_step_amps=2)
     h = Harness(backend, 650, cfg)
     h.start_from_app()
     h.run(400)
@@ -221,7 +248,7 @@ def test_power_limit_beats_the_app(backend):
 
 
 def test_stop_from_app_cancels_a_resume(backend):
-    ctrl = backend.Controller()
+    ctrl = backend.Controller(CFG)
     ctrl.follow_user(True, 5)
     ctrl.tick(0, Reading(5000))                # Volture stops it: over the limit
     ctrl.follow_user(False, 0)                 # then the owner stops it in the app too
@@ -230,7 +257,7 @@ def test_stop_from_app_cancels_a_resume(backend):
 
 
 def test_no_resume_when_car_cannot_charge(backend):
-    ctrl = backend.Controller()
+    ctrl = backend.Controller(CFG)
     ctrl.follow_user(True, 5)
     ctrl.tick(0, Reading(5000))                # Volture stops it: over the limit
     ctrl.tick(10, Reading(650), car_can_charge=False)

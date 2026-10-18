@@ -29,6 +29,22 @@ esphome:
   includes:  # Volture's control loop, see the end of this file
     - esp32/controller.h
     - esp32/device.h
+  on_boot:
+    # Before any page or API client connects: hide every car control and non-charging reading
+    # (esp32/device.h, hide_car_entities, says why).
+    priority: 800
+    then:
+      - lambda: volture_device::hide_car_entities();
+
+# A browser page left open but not read (a phone with the tab in the background) keeps its TCP
+# connection alive, and lwIP holds up to TCP_SND_BUF of unsent data for it until the phone closes it.
+# Each such page cost ~6 KB with the 5760 B default; a few of them plus a Grafana TLS push ran the
+# heap out (abort). Two segments (2 x MSS 1440) per connection halve that; the Shelly and Grafana
+# exchanges are small, so throughput does not matter.
+esp32:
+  framework:
+    sdkconfig_options:
+      CONFIG_LWIP_TCP_SND_BUF_DEFAULT: "2880"
 
 # The firmware defaults to DRIVER (unlock, open trunk...). volture only needs charging,
 # so the paired key gets the least-privileged role. Changing it later requires re-pairing.
@@ -56,7 +72,7 @@ wifi:
 #   vin: !secret tesla_vin
 
 # ---- Volture's control loop, running on the ESP32 itself ----
-# Every 5 s: read the Shelly, read the car's state, run one cycle of esp32/controller.h (volture::Loop),
+# Every second: read the Shelly, read the car's state, run one cycle of esp32/controller.h (volture::Loop),
 # send what it decides. With "Volture control" off (the default) it only shows what it would do.
 
 globals:
@@ -247,7 +263,7 @@ script:
           }
 
 interval:
-  - interval: 5s
+  - interval: 1s  # the Shelly EM refreshes its reading more than once a second
     then:
       - http_request.get:
           url: !lambda return id(shelly_url).state + "/emeter/0";

@@ -220,7 +220,7 @@ cp secrets.example.yaml secrets.yaml && open -e secrets.yaml
 | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `wifi_ssid`, `wifi_password`   | Your Wi-Fi. It must offer **2.4 GHz**; the ESP32 cannot use 5 GHz.                                                                                                                                                            |
 | `wifi2_ssid`, `wifi2_password` | A second Wi-Fi (e.g. office and garage). The ESP32 joins whichever is in range. Both are required.                                                                                                                            |
-| `web_password`                 | Password of the ESP32's web page (user `volture`). Any long random string.                                                                                                                                                    |
+| `web_user`, `web_password`     | Login of the ESP32's web page.                                                                                                                                                                                                |
 | `wifi_hotspot_password`        | 8+ characters. The ESP32 opens its own Wi-Fi with it if it cannot join yours.                                                                                                                                                 |
 | `api_encryption_key`           | Encrypts Mac ↔ ESP32 traffic. Generate it with the command in the template.                                                                                                                                                   |
 | `tesla_vin`                    | The car's VIN (17 characters, in the Tesla app).                                                                                                                                                                              |
@@ -284,7 +284,7 @@ Everything comes from `secrets.yaml`. Then start charging as usual (Tesla app or
 
 ### Watching the ESP32
 
-Open **http://volture.local** (phone or Mac, on your Wi-Fi), user `volture`, password `web_password` from `secrets.yaml`. The page shows every value live and lets you change two things:
+Open **http://volture.local** (phone or Mac, on your Wi-Fi), user `web_user`, password `web_password` from `secrets.yaml`. The page shows every value live and lets you change two things:
 
 The page opens with the Volture logo and three Volture sections, above the Tesla firmware's own entities:
 

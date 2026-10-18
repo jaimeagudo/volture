@@ -28,17 +28,33 @@ constexpr const char *BATTERY = "Battery";
 // Seconds since boot, from a 64-bit microsecond timer: millis() wraps after 49 days, this does not.
 inline double now_s() { return static_cast<double>(esp_timer_get_time()) / 1e6; }
 
-// The settings of this device's control loop (shown on the page too): Config's built-in defaults.
-// TODO: settings from the live settings page instead of the defaults.
-inline const volture::Config &config() {
-  static const volture::Config instance;
+// This device's settings: the volture: block of secrets.yaml, copied in at boot (esp32.yaml on_boot).
+// The web page's settings (headroom, the no-reading fail-safe) override them every cycle (volture_cycle).
+inline volture::Config &config() {
+  static volture::Config instance;
   return instance;
 }
 
-// The one control loop of this device.
-inline volture::Loop &loop() {
-  static volture::Loop instance(config());
+inline volture::LoopSettings &loop_settings() {
+  static volture::LoopSettings instance;
   return instance;
+}
+
+// The one control loop of this device; first used after on_boot has filled the settings.
+inline volture::Loop &loop() {
+  static volture::Loop instance(config(), loop_settings());
+  return instance;
+}
+
+// True once every poll_s seconds (the page's Poll interval); the interval timer itself ticks every second.
+inline bool poll_due(float poll_s) {
+  static double last = -1e9;
+  const double now = now_s();
+  if (now - last < poll_s - 0.05) {  // 50 ms slack: the 1 s timer is not exact
+    return false;
+  }
+  last = now;
+  return true;
 }
 
 template<typename Entity, typename List> Entity *find(const List &entities, const char *name) {

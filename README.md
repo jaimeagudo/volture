@@ -32,7 +32,7 @@ You need: an ESP32 (classic, 4 MB flash), a Shelly EM Gen1 with its clamp, a Tes
 | Piece                                        | State                                                                                                                                                      |
 | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Control algorithm + tests                    | Done in Python and in C++ (`esp32/controller.h`); the same 24 scenarios pass on both, plus 6 for the C++ cycle on its own; every setting in `secrets.yaml` |
-| Control loop running on the ESP32 itself     | Running, **observe-only by default** (switch "Control" on its web page). Settings: built-in defaults for now                                               |
+| Control loop running on the ESP32 itself     | Running, **observe-only by default** (switch "Control" on its web page). Settings: the `volture:` block of `secrets.yaml`; poll interval, headroom and the no-reading fail-safe editable on the page |
 | Observing the ESP32 (web page, live JSON)    | Done: `http://volture.local` (see [Watching the ESP32](#watching-the-esp32)); optional push to Grafana ([Grafana](#grafana-optional))                      |
 | Simulator (fake Shelly + fake car, web page) | Done, run end to end                                                                                                                                       |
 | ESP32 firmware                               | Built from `esp32.yaml`, flashed, on Wi-Fi as `volture.local`                                                                                              |
@@ -72,7 +72,7 @@ You need: an ESP32 (classic, 4 MB flash), a Shelly EM Gen1 with its clamp, a Tes
 
 ## Control algorithm
 
-Runs every `poll_s` with the Shelly reading (`power`, `voltage`, `is_valid`). The numbers below are the defaults; **every one is a setting in the `volture:` block of `secrets.yaml`**, so another installation only needs that file edited. Ceiling = `contracted_power_w` − `headroom_w` = 4,600 − 230 = **4,370 W**. V is the voltage the Shelly measures (`fallback_voltage_v`, 230 V, if it reports none within 180–260 V).
+Runs every `poll_s` with the Shelly reading (`power`, `voltage`, `is_valid`). The numbers below are the defaults; **every one is a setting in the `volture:` block of `secrets.yaml`**, so another installation only needs that file edited. Ceiling = `contracted_power_w` − `headroom_w` (default 0, so 4,600 W; the examples below use a 230 W headroom: **4,370 W**). V is the voltage the Shelly measures (`fallback_voltage_v`, 230 V, if it reports none within 180–260 V).
 
 | Situation                                                                                 | Action                                                                                                                            |
 | ----------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
@@ -84,7 +84,7 @@ Runs every `poll_s` with the Shelly reading (`power`, `voltage`, `is_valid`). Th
 | Stopped **by Volture** and house + 5 A × V fits under 4,370 W for `resume_after_s` (60 s) | Restart at 5 A, unless unplugged or at its battery charge limit                                                                   |
 | Stopped by anyone else, or never started                                                  | Nothing: **Volture never starts a charge**                                                                                        |
 | Believed stopped but power > 4,600 W                                                      | Send "stop" (at most every 15 s): the car may be charging without us                                                              |
-| Shelly unreachable or `is_valid: false`                                                   | Drop to 5 A; after `stop_after_invalid_s` (30 s), stop                                                                            |
+| Shelly unreachable or `is_valid: false`                                                   | Nothing: the car carries on as it is (default). With `stop_without_reading`: drop to 5 A; after `stop_after_invalid_s` (30 s), stop |
 
 
 **You start and stop; Volture sets the amps.** Charging is always started by you: from the Tesla app, or by the car's own schedule. Volture listens to the car's reported state through the ESP32 (charging on/off, amps, cable connected, battery % and charge limit %). A change it did not ask for came from outside, and:
@@ -103,7 +103,7 @@ When Volture restarts a charge it stopped itself, it skips it while the car is u
 
 ### Fail-safe
 
-- **No trustworthy reading → charge less, then stop.** The controller never keeps commanding power blind.
+- **No trustworthy reading → Volture sends nothing** (default): a faulty or unreachable Shelly never stops or slows a charge; the car carries on as it is. Switch **Stop without Shelly** on (page, or `stop_without_reading` in `secrets.yaml`) to drop to the minimum amps instead, then stop after **Stop after no reading** (`stop_after_invalid_s`).
 - **A failed or unconfirmed command is logged and re-sent; the loop never stops reading power.** A command gives up after `car_command_timeout_s` (10 s), and the ESP32 connection is kept alive in the background.
 - **A stop from the Tesla app is permanent** until you start charging again (app or schedule).
 
@@ -298,6 +298,10 @@ One section per data source, so every value says where it comes from. Every car 
 |                         | Event                                                                                      | What the car did with the last command: `confirmed`, `waiting`, `resend`, `outside_change`, `dry_run`…                                         |
 | **Volture settings**    | Control (switch)                                                                           | Off (default): observe only, nothing sent to the car. On: the ESP32 drives the car. Kept across reboots                                        |
 |                         | Shelly EM URL (text)                                                                       | Where the ESP32 reads power: the real Shelly EM (`http://<Shelly IP>`), or the Mac's fake one (`http://<Mac IP>:8081`, not `localhost`)        |
+|                         | Poll interval (s)                                                                          | How often the Shelly is read. First boot: `poll_s`; then kept across reboots                                                                   |
+|                         | Headroom (W)                                                                               | Margin kept below the contracted power. First boot: `headroom_w` (default 0)                                                                   |
+|                         | Stop without Shelly (switch)                                                               | Off (default): without a Shelly reading Volture sends nothing, the car carries on. On: minimum amps, then stop                                 |
+|                         | Stop after no reading (s)                                                                  | With Stop without Shelly on: how long without a reading before stopping (`stop_after_invalid_s`)                                               |
 |                         | Grafana push (switch)                                                                      | Off (default): nothing goes to the internet. On: push to Grafana, if configured ([Grafana](#grafana-optional)). Kept across reboots            |
 |                         | Uptime, Scheduled reboot                                                                   | Time since the last start; the daily reboot hour (`scheduled_reboot_hour`), skipped while the car is plugged in                                |
 |                         | Reboot ESP32 (button)                                                                      | Reboots now (~10 s). Unlike the scheduled one it does not check the cable: a charge Volture had paused is then not resumed                     |
@@ -410,7 +414,7 @@ Import it: in your Grafana, **Dashboards** → **New** → **Import** → *Uploa
 - Measure how often the Shelly Gen1 refreshes `power` (`curl` every second); it bounds how short `poll_s` can be.
 - Confirm the clamp model (50 A or 120 A) covers the house's peak. The installation is single-phase.
 - Hand control to the ESP32 for real ("Control" on) once the real Shelly is in.
-- Settings on the ESP32's page: [issue #13](https://github.com/jaimeagudo/volture/issues/13) (today the built-in defaults, identical to `secrets.example.yaml`).
+- More settings on the ESP32's page: [issue #13](https://github.com/jaimeagudo/volture/issues/13) (today: poll interval, headroom and the no-reading fail-safe; the rest comes from `secrets.yaml` at build time).
 - A slow car confirmation can be mistaken for a change made in the Tesla app: [issue #14](https://github.com/jaimeagudo/volture/issues/14).
 - Grafana push: run it a few days with a real account and watch `volture_heap_block` and Bluetooth drops ([issue #12](https://github.com/jaimeagudo/volture/issues/12)).
 

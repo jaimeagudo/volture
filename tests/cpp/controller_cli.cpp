@@ -68,6 +68,7 @@ void apply_config(Config &cfg, const std::string &key, const std::string &value)
   else if (key == "ramp_up_every_s") { cfg.ramp_up_every_s = std::stod(value); }
   else if (key == "resume_after_s") { cfg.resume_after_s = std::stod(value); }
   else if (key == "stop_after_invalid_s") { cfg.stop_after_invalid_s = std::stod(value); }
+  else if (key == "stop_without_reading") { cfg.stop_without_reading = value == "True" || value == "1"; }
   else { throw std::invalid_argument("unknown config key " + key); }
 }
 

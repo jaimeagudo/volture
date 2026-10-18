@@ -460,7 +460,7 @@ The car keeps charging at its current amps during the roughly 30 seconds the ESP
 
 ✻ Worked for 11s · done 12:37 AM
 
-# how does the hostname volture resolves? it's not static ip, is it ?
+# Tips: how does the hostname volture.local resolves?
 
 It's not a static IP. Two mechanisms are involved:
 

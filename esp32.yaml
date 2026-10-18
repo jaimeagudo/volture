@@ -82,7 +82,7 @@ web_server:
   ota: false     # firmware updates only through `esphome run` (encrypted), never through the page
   auth:
     type: digest  # the password itself never travels (basic would send it nearly in clear)
-    username: volture
+    username: !secret web_user
     password: !secret web_password
   # Volture's own entities in their own sections, above the Tesla firmware's (lower weight = higher).
   sorting_groups:

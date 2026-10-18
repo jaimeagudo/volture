@@ -28,10 +28,16 @@ constexpr const char *BATTERY = "Battery";
 // Seconds since boot, from a 64-bit microsecond timer: millis() wraps after 49 days, this does not.
 inline double now_s() { return static_cast<double>(esp_timer_get_time()) / 1e6; }
 
-// The one control loop of this device, with the defaults of Config / LoopSettings.
+// The settings of this device's control loop (shown on the page too): Config's built-in defaults.
 // TODO: settings from the live settings page instead of the defaults.
+inline const volture::Config &config() {
+  static const volture::Config instance;
+  return instance;
+}
+
+// The one control loop of this device.
 inline volture::Loop &loop() {
-  static volture::Loop instance;
+  static volture::Loop instance(config());
   return instance;
 }
 
@@ -48,6 +54,15 @@ inline esphome::switch_::Switch *charger_switch() {
   return find<esphome::switch_::Switch>(esphome::App.get_switches(), CHARGER);
 }
 
+// Whether the charging cable is in; nullopt while the car has not reported it (e.g. out of Bluetooth range).
+inline std::optional<bool> plugged() {
+  auto *cable = find<esphome::binary_sensor::BinarySensor>(esphome::App.get_binary_sensors(), CHARGER);
+  if (cable == nullptr || !cable->has_state()) {
+    return std::nullopt;
+  }
+  return cable->state;
+}
+
 // The car's state as the firmware last reported it; nullopt until charging and amps are known.
 inline std::optional<volture::CarState> observe() {
   auto *charging = charger_switch();
@@ -57,10 +72,7 @@ inline std::optional<volture::CarState> observe() {
   }
   volture::CarState state{charging->state, static_cast<int>(amps->state + 0.5f), std::nullopt, std::nullopt,
                           std::nullopt};
-  auto *plugged = find<esphome::binary_sensor::BinarySensor>(esphome::App.get_binary_sensors(), CHARGER);
-  if (plugged != nullptr && plugged->has_state()) {
-    state.plugged = plugged->state;
-  }
+  state.plugged = plugged();
   auto *battery = find<esphome::sensor::Sensor>(esphome::App.get_sensors(), BATTERY);
   if (battery != nullptr && battery->has_state()) {
     state.battery_pct = battery->state;
@@ -72,20 +84,39 @@ inline std::optional<volture::CarState> observe() {
   return state;
 }
 
-// Shelly EM Gen1 /emeter/0 JSON -> Reading. nullopt when the body is not the expected JSON.
-inline std::optional<volture::Reading> parse_shelly(const std::string &body) {
-  std::optional<volture::Reading> reading;
-  esphome::json::parse_json(body, [&reading](JsonObject root) -> bool {
+// Every field of the Shelly EM Gen1 /emeter/0 reply ({"power":142.17,"reactive":-411.31,"pf":-0.33,
+// "voltage":230.10,"is_valid":true,"total":102.6,"total_returned":5.0}); NAN where a field is missing.
+struct ShellyEm {
+  bool valid = false;           // is_valid: the Shelly trusts its own measurement
+  float power_w = NAN;          // active power (W)
+  float reactive_var = NAN;     // reactive power (var)
+  float pf = NAN;               // power factor
+  float voltage_v = NAN;        // grid voltage (V)
+  float total_wh = NAN;         // energy consumed since the Shelly's counter reset (Wh)
+  float total_returned_wh = NAN;  // energy returned to the grid (Wh)
+};
+
+// nullopt when the body is not the expected JSON (no "power").
+inline std::optional<ShellyEm> parse_shelly(const std::string &body) {
+  std::optional<ShellyEm> shelly;
+  esphome::json::parse_json(body, [&shelly](JsonObject root) -> bool {
     if (!root["power"].is<float>()) {
       return false;
     }
-    volture::Reading parsed{root["power"].as<double>(), root["is_valid"] | false, std::nullopt};
-    if (root["voltage"].is<float>()) {
-      parsed.voltage_v = root["voltage"].as<double>();
-    }
-    reading = parsed;
+    auto number = [&root](const char *key) { return root[key].is<float>() ? root[key].as<float>() : NAN; };
+    shelly = ShellyEm{root["is_valid"] | false, number("power"), number("reactive"), number("pf"),
+                      number("voltage"), number("total"), number("total_returned")};
     return true;
   });
+  return shelly;
+}
+
+// What the controller needs from the Shelly.
+inline volture::Reading reading_of(const ShellyEm &shelly) {
+  volture::Reading reading{shelly.power_w, shelly.valid, std::nullopt};
+  if (!std::isnan(shelly.voltage_v)) {
+    reading.voltage_v = shelly.voltage_v;
+  }
   return reading;
 }
 
@@ -219,10 +250,16 @@ inline Telemetry &telemetry() {
 }
 
 // Buffer a sample if something changed, or if a minute passed (so Grafana never shows the
-// series as stale: it drops series not seen for 5 minutes).
+// series as stale: it drops series not seen for 5 minutes). At most one every MIN_SAMPLE_S: the
+// cycle runs every second, and one line per second would overflow MAX_BUFFER between pushes.
+constexpr double MIN_SAMPLE_S = 5.0;
+
 inline void record(const Sample &sample, double now, unsigned heap_free, unsigned heap_block, float wifi_dbm,
                    float ble_dbm, long long unix_ns) {
   Telemetry &t = telemetry();
+  if (now - t.previous_at < MIN_SAMPLE_S) {
+    return;
+  }
   if (t.previous && same(*t.previous, sample) && now - t.previous_at < 60.0) {
     return;
   }
@@ -233,6 +270,17 @@ inline void record(const Sample &sample, double now, unsigned heap_free, unsigne
   }
   t.previous = sample;
   t.previous_at = now;
+}
+
+// An HTTPS push needs mbedTLS's 16 KB receive buffer in one block plus ~20 KB more for the handshake.
+// Starting one with less ran the heap out (abort) when several unread pages held memory, so the push
+// waits for the next minute instead (the buffer keeps its lines, bounded by MAX_BUFFER).
+constexpr size_t PUSH_MIN_FREE = 45 * 1024;
+constexpr size_t PUSH_MIN_BLOCK = 32 * 1024;
+
+inline bool memory_for_push() {
+  return heap_caps_get_free_size(MALLOC_CAP_8BIT) >= PUSH_MIN_FREE &&
+         heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= PUSH_MIN_BLOCK;
 }
 
 // "Basic base64(user:token)" for the Authorization header; built once, kept for the program's life.
@@ -252,6 +300,97 @@ template<typename Entity, typename List> float value_of(const List &entities, co
 inline std::string text_of(const char *name) {
   auto *entity = find<esphome::text_sensor::TextSensor>(esphome::App.get_text_sensors(), name);
   return entity != nullptr && entity->has_state() ? entity->state : std::string();
+}
+
+// The car firmware creates ~90 entities: every control the paired key allows plus every reading.
+// The web page and the API show only this project's entities (those in a section of esp32.yaml) and the car's
+// charging readings (names starting "Charg"); everything else becomes internal. Why: (1) no car control
+// can be tapped by accident (the owner uses the Tesla app; this loop drives the car through the entities
+// directly, which internal entities still allow); (2) the web server serializes and queues every visible
+// entity for each open page, which ran the heap out (abort in AsyncEventSourceResponse::deferrable_send_state).
+// The car readings that stay go to a "Tesla" section, so every value on the page says where it comes from.
+constexpr uint64_t TESLA_GROUP = 0x7e51a;  // any id not used by esp32.yaml's sorting_groups (hashes of their ids)
+
+// This project's entities are the ones esp32.yaml placed in a page section (a web_server: block).
+inline bool ours(esphome::web_server::WebServer *web, esphome::EntityBase *entity) {
+  return web->sorting_entitys_.contains(entity);
+}
+
+// The one car control kept: pairing (setup guide, step 7) starts from it. A stray tap only asks the car
+// to pair, which still needs the NFC key card on the console.
+constexpr const char *PAIR_BUTTON = "Pair BLE Key";
+
+template<typename List> void arrange(esphome::web_server::WebServer *web, const List &entities, bool read_only) {
+  for (auto *entity : entities) {
+    if (ours(web, entity)) {
+      continue;
+    }
+    const auto &name = entity->get_name();
+    if ((read_only && name.starts_with("Charg")) || name == PAIR_BUTTON) {
+      web->add_entity_config(entity, 50, TESLA_GROUP);
+    } else {
+      entity->set_internal(true);
+    }
+  }
+}
+
+inline void arrange_page(esphome::web_server::WebServer *web) {
+  using esphome::App;
+  web->add_sorting_group(TESLA_GROUP, "Tesla", 0);
+  arrange(web, App.get_binary_sensors(), true);
+  arrange(web, App.get_sensors(), true);
+  arrange(web, App.get_text_sensors(), true);
+  arrange(web, App.get_switches(), false);
+  arrange(web, App.get_buttons(), false);
+  arrange(web, App.get_numbers(), false);
+  arrange(web, App.get_selects(), false);
+  arrange(web, App.get_texts(), false);
+  arrange(web, App.get_locks(), false);
+  arrange(web, App.get_covers(), false);
+  arrange(web, App.get_climates(), false);
+}
+
+// The page's Summary: where the power measured by the Shelly goes. NAN where it cannot be known.
+struct Summary {
+  float total_w;  // the whole house including the car = Shelly power
+  float tesla_w;  // car current (as the car reports it) x Shelly voltage
+  float house_w;  // total - Tesla
+};
+
+inline Summary summary(float shelly_power_w, float shelly_voltage_v, float car_current_a, std::optional<bool> car_plugged) {
+  float car_a = car_current_a;
+  // No current reported and the cable not known to be in: the car is unplugged or out of Bluetooth
+  // range, which almost always means not at home (owner's choice: count it as 0 W).
+  if (std::isnan(car_a) && !car_plugged.value_or(false)) {
+    car_a = 0;
+  }
+  const float tesla_w = car_a * shelly_voltage_v;
+  return Summary{shelly_power_w, tesla_w, shelly_power_w - tesla_w};
+}
+
+// Publish only when the value changes: every publish is an event sent to every open page.
+inline void publish_changed(esphome::sensor::Sensor *sensor, float value) {
+  const bool same = sensor->has_state() &&
+                    ((std::isnan(value) && std::isnan(sensor->state)) || value == sensor->state);
+  if (!same) {
+    sensor->publish_state(value);
+  }
+}
+
+// Daily reboot (secrets.yaml scheduled_reboot_hour; -1 = never), called every hour on the hour.
+// Skipped while the cable is plugged in: whether Volture paused the car lives only in RAM
+// (volture::Controller::paused_by_us), so a reboot then would leave that charge never resumed.
+// Unknown cable state (car out of Bluetooth range, i.e. not at home) counts as unplugged.
+inline void reboot_if_due(int reboot_hour, int hour_now) {
+  if (reboot_hour < 0 || hour_now != reboot_hour) {
+    return;
+  }
+  if (plugged().value_or(false)) {
+    ESP_LOGI("volture", "scheduled reboot skipped: car plugged in");
+    return;
+  }
+  ESP_LOGI("volture", "scheduled reboot");
+  esphome::App.safe_reboot();
 }
 
 }  // namespace volture_device

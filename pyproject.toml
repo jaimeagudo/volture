@@ -1,6 +1,6 @@
 [project]
 name = "volture"
-version = "0.1.0"
+version = "0.2.0"
 description = "Tesla Model 3 charge limiter driven by a Shelly EM on the main feed"
 requires-python = ">=3.12,<3.15"  # esphome 2026.9.1 range
 dependencies = ["aiohttp>=3.9", "aioesphomeapi>=24", "pyyaml>=6"]

@@ -219,10 +219,16 @@ inline Telemetry &telemetry() {
 }
 
 // Buffer a sample if something changed, or if a minute passed (so Grafana never shows the
-// series as stale: it drops series not seen for 5 minutes).
+// series as stale: it drops series not seen for 5 minutes). At most one every MIN_SAMPLE_S: the
+// cycle runs every second, and one line per second would overflow MAX_BUFFER between pushes.
+constexpr double MIN_SAMPLE_S = 5.0;
+
 inline void record(const Sample &sample, double now, unsigned heap_free, unsigned heap_block, float wifi_dbm,
                    float ble_dbm, long long unix_ns) {
   Telemetry &t = telemetry();
+  if (now - t.previous_at < MIN_SAMPLE_S) {
+    return;
+  }
   if (t.previous && same(*t.previous, sample) && now - t.previous_at < 60.0) {
     return;
   }
@@ -252,6 +258,40 @@ template<typename Entity, typename List> float value_of(const List &entities, co
 inline std::string text_of(const char *name) {
   auto *entity = find<esphome::text_sensor::TextSensor>(esphome::App.get_text_sensors(), name);
   return entity != nullptr && entity->has_state() ? entity->state : std::string();
+}
+
+// The car firmware creates ~90 entities: every control the paired key allows plus every reading.
+// The web page and the API show only Volture's own entities and the car's charging readings
+// (names starting "Charg"); everything else becomes internal. Why: (1) no car control can be tapped
+// by accident (the owner uses the Tesla app; this loop drives the car through the entities directly,
+// which internal entities still allow); (2) the web server serializes and queues every visible entity
+// for each open page, which ran the heap out (abort in AsyncEventSourceResponse::deferrable_send_state).
+inline bool shown(const esphome::EntityBase *entity, bool read_only) {
+  const auto &name = entity->get_name();
+  return name.starts_with("Volture") || (read_only && name.starts_with("Charg"));
+}
+
+template<typename List> void hide_unless_shown(const List &entities, bool read_only) {
+  for (auto *entity : entities) {
+    if (!shown(entity, read_only)) {
+      entity->set_internal(true);
+    }
+  }
+}
+
+inline void hide_car_entities() {
+  using esphome::App;
+  hide_unless_shown(App.get_binary_sensors(), true);
+  hide_unless_shown(App.get_sensors(), true);
+  hide_unless_shown(App.get_text_sensors(), true);
+  hide_unless_shown(App.get_switches(), false);
+  hide_unless_shown(App.get_buttons(), false);
+  hide_unless_shown(App.get_numbers(), false);
+  hide_unless_shown(App.get_selects(), false);
+  hide_unless_shown(App.get_texts(), false);
+  hide_unless_shown(App.get_locks(), false);
+  hide_unless_shown(App.get_covers(), false);
+  hide_unless_shown(App.get_climates(), false);
 }
 
 }  // namespace volture_device

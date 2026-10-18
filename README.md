@@ -9,9 +9,9 @@ https://honestmarsh2481.grafana.net/d/volture/
 
 **Charge a Tesla Model 3 at home as fast as possible without ever tripping the house's 4.6 kW contracted power limit.**
 
-A **Shelly EM** clamp on the main feed measures what the whole house draws. Every 5 s, Volture reads it and decides how many amps (5–32 A) the car may use right now. An **ESP32** passes that to the car over Bluetooth Low Energy (BLE). When the oven turns on, the car slows down; when it turns off, the car speeds up again.
+A **Shelly EM** clamp on the main feed measures what the whole house draws. Every second, Volture reads it and decides how many amps (5–32 A) the car may use right now. An **ESP32** passes that to the car over Bluetooth Low Energy (BLE). When the oven turns on, the car slows down; when it turns off, the car speeds up again.
 
-**Target:** the ESP32 does everything on its own, 24/7: read the Shelly, decide, command the car. **Today** the C++ loop runs on the ESP32 but only observes ("Volture control" off: it shows what it would do and sends nothing); the Python loop on a Mac drives the car. Turning "Volture control" on, with the Mac loop stopped, hands control to the ESP32.
+**Target:** the ESP32 does everything on its own, 24/7: read the Shelly, decide, command the car. **Today** the C++ loop runs on the ESP32 but only observes ("Volture control" off: it shows what it would do and sends nothing); turning "Volture control" on hands control to it. The Python loop on a Mac can no longer drive the real car: the ESP32 hides the car's controls from its API as well as its web page.
 
 > **Safety:** this is a load *manager*, not a protection device. It does not replace the utility's power limiter or the breakers. Every failure mode is designed to end in "charge less" or "stop charging" (see [Fail-safe](#fail-safe)).
 
@@ -286,7 +286,7 @@ Everything comes from `secrets.yaml`. Then start charging as usual (Tesla app or
 
 Open **http://volture.local** (phone or Mac, on your Wi-Fi), user `web_user`, password `web_password` from `secrets.yaml`. The page shows every value live and lets you change two things:
 
-The page opens with the Volture logo and three Volture sections, above the Tesla firmware's own entities:
+The page opens with the Volture logo and three Volture sections. Below them, only the car's charging readings (names starting "Charg", read-only). Every car control and every other car reading is hidden from the page and the API: the car is controlled from the Tesla app, and fewer entities keep the page from running the ESP32 out of memory.
 
 | Section                 | Entity                                       | Meaning                                                                                                                                                   |
 | ----------------------- | -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -470,4 +470,4 @@ Where .local works:                                                             
 - Android: Chrome on recent versions usually works; some apps and older phones don't.                                        - Only the network the ESP32 is on: mDNS doesn'ttworks (for example a guest Wi-Fi, or your twoWi-Fi networks if the router keeps them apart) or over a VPN.                                                             
 My recommendation: reserve its IP in your router (often called "DHCP reservation" or "static lease"). The router then always gives the ESP32 the same address, e.g. 192.168.0erywhere .local doesn't.
                                                                                                                              Fixing the IP on the ESP32 itself (ESPHome's mane router could hand that address to anotherdevice, and it breaks if you change routers. The router reservation has neither problem.                                    
-Do the same for the Shelly EM when you install it. Its address goes into Volture Shelly EM URL, and the ESP32 reads it by IP every 5 seconds, so it must not change.
+Do the same for the Shelly EM when you install it. Its address goes into Volture Shelly EM URL, and the ESP32 reads it by IP every second, so it must not change.

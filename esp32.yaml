@@ -15,6 +15,8 @@ substitutions:
   grafana_url: !secret grafana_url
   grafana_user: !secret grafana_user
   grafana_token: !secret grafana_token
+  # Local hour (0-23) of the daily reboot, only while the car is unplugged; -1 = never.
+  scheduled_reboot_hour: !secret scheduled_reboot_hour
 
 packages:
   yoziru.esphome-tesla-ble:
@@ -30,11 +32,13 @@ esphome:
     - esp32/controller.h
     - esp32/device.h
   on_boot:
-    # Before any page or API client connects: hide every car control and non-charging reading
-    # (esp32/device.h, hide_car_entities, says why).
+    # Before any page or API client connects: hide every car control and non-charging reading, and put
+    # the car's charging readings in a "Tesla" section (esp32/device.h, arrange_page, says why).
     priority: 800
     then:
-      - lambda: volture_device::hide_car_entities();
+      - lambda: |-
+          volture_device::arrange_page(id(web_ui));
+          id(contracted_power).publish_state(volture_device::config().contracted_power_w);
 
 # A browser page left open but not read (a phone with the tab in the background) keeps its TCP
 # connection alive, and lwIP holds up to TCP_SND_BUF of unsent data for it until the phone closes it.
@@ -93,6 +97,7 @@ http_request:
 # ALWAYS ON (owner's requirement): live values + JSON stream (/events) at http://volture.local.
 # Never remove or make it optional.
 web_server:
+  id: web_ui
   port: 80
   version: 3
   ota: false     # firmware updates only through `esphome run` (encrypted), never through the page
@@ -100,8 +105,11 @@ web_server:
     type: digest  # the password itself never travels (basic would send it nearly in clear)
     username: !secret web_user
     password: !secret web_password
-  # Volture's own entities in their own sections, above the Tesla firmware's (lower weight = higher).
+  # One section per data source, so every value says where it comes from (lower weight = higher).
+  # The "Tesla" section (the car's charging readings) is added at boot by arrange_page.
   sorting_groups:
+    - {id: summary, name: "Summary", sorting_weight: -50}
+    - {id: shelly, name: "Shelly EM", sorting_weight: -40}
     - {id: volture_live, name: "Volture", sorting_weight: -30}
     - {id: volture_settings, name: "Volture settings", sorting_weight: -20}
     - {id: volture_diagnostics, name: "Volture diagnostics", sorting_weight: -10}
@@ -110,15 +118,27 @@ web_server:
 debug:
   update_interval: 5s
 
-# Network time, ONLY to timestamp the lines pushed to Grafana. Never used by the control logic.
+# Network time, ONLY to timestamp the lines pushed to Grafana and for the daily reboot.
+# Never used by the control logic.
 time:
   - platform: sntp
     id: sntp_time
+    timezone: Europe/Madrid
+    on_time:
+      - seconds: 0
+        minutes: 0
+        then:
+          - lambda: volture_device::reboot_if_due(${scheduled_reboot_hour}, id(sntp_time).now().hour);
+
+button:
+  - platform: restart
+    name: Reboot ESP32
+    web_server: {sorting_group_id: volture_settings, sorting_weight: 6}
 
 switch:
   - platform: template
     id: grafana_push
-    name: Volture Grafana push
+    name: Grafana push
     web_server: {sorting_group_id: volture_settings, sorting_weight: 3}
     icon: mdi:chart-line
     optimistic: true
@@ -127,7 +147,7 @@ switch:
       - lambda: volture_device::telemetry() = volture_device::Telemetry();  # free the buffer
   - platform: template
     id: volture_control
-    name: Volture control
+    name: Control
     web_server: {sorting_group_id: volture_settings, sorting_weight: 1}
     icon: mdi:car-electric
     optimistic: true
@@ -136,7 +156,7 @@ switch:
 text:
   - platform: template
     id: shelly_url
-    name: Volture Shelly EM URL
+    name: Shelly EM URL
     web_server: {sorting_group_id: volture_settings, sorting_weight: 2}
     mode: text
     optimistic: true
@@ -144,55 +164,155 @@ text:
     initial_value: !secret shelly_url
 
 sensor:
+  # Summary: where the power the Shelly measures goes (esp32/device.h, summary).
   - platform: template
-    id: house_power
-    name: Volture house power
-    web_server: {sorting_group_id: volture_live, sorting_weight: 1}
+    id: contracted_power
+    name: Contracted power
+    web_server: {sorting_group_id: summary, sorting_weight: 1}
+    unit_of_measurement: W
+    device_class: power
+    accuracy_decimals: 0
+    update_interval: never  # a constant: published once at boot (on_boot)
+  - platform: template
+    id: total_power
+    name: Total power
+    web_server: {sorting_group_id: summary, sorting_weight: 2}
     unit_of_measurement: W
     device_class: power
     accuracy_decimals: 0
     update_interval: never
   - platform: template
-    id: grid_voltage
-    name: Volture grid voltage
-    web_server: {sorting_group_id: volture_live, sorting_weight: 2}
-    unit_of_measurement: V
-    device_class: voltage
+    id: tesla_power
+    name: Tesla power
+    web_server: {sorting_group_id: summary, sorting_weight: 3}
+    unit_of_measurement: W
+    device_class: power
     accuracy_decimals: 0
     update_interval: never
   - platform: template
+    id: house_power
+    name: House power
+    web_server: {sorting_group_id: summary, sorting_weight: 4}
+    unit_of_measurement: W
+    device_class: power
+    accuracy_decimals: 0
+    update_interval: never
+  # Shelly EM: every value of its /emeter/0 reply (empty: no reading this cycle).
+  - platform: template
+    id: shelly_power
+    name: Power
+    web_server: {sorting_group_id: shelly, sorting_weight: 1}
+    unit_of_measurement: W
+    device_class: power
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: shelly_voltage
+    name: Voltage
+    web_server: {sorting_group_id: shelly, sorting_weight: 2}
+    unit_of_measurement: V
+    device_class: voltage
+    accuracy_decimals: 1
+    update_interval: never
+  - platform: template
+    id: shelly_reactive
+    name: Reactive power
+    web_server: {sorting_group_id: shelly, sorting_weight: 3}
+    unit_of_measurement: var
+    device_class: reactive_power
+    accuracy_decimals: 0
+    update_interval: never
+  - platform: template
+    id: shelly_pf
+    name: Power factor
+    web_server: {sorting_group_id: shelly, sorting_weight: 4}
+    device_class: power_factor
+    accuracy_decimals: 2
+    update_interval: never
+  - platform: template
+    id: shelly_total
+    name: Energy total
+    web_server: {sorting_group_id: shelly, sorting_weight: 5}
+    unit_of_measurement: Wh
+    device_class: energy
+    accuracy_decimals: 1
+    update_interval: never
+  - platform: template
+    id: shelly_total_returned
+    name: Energy returned
+    web_server: {sorting_group_id: shelly, sorting_weight: 6}
+    unit_of_measurement: Wh
+    device_class: energy
+    accuracy_decimals: 1
+    update_interval: never
+  - platform: template
     id: volture_amps
-    name: Volture amps
-    web_server: {sorting_group_id: volture_live, sorting_weight: 3}
+    name: Amps
+    web_server: {sorting_group_id: volture_live, sorting_weight: 1}
     unit_of_measurement: A
     device_class: current
     accuracy_decimals: 0
     update_interval: never
+  # Memory as % of the whole internal heap (the debug component reports bytes of MALLOC_CAP_INTERNAL).
   - platform: debug
     free:
-      name: Volture heap free
+      name: Memory free
       web_server: {sorting_group_id: volture_diagnostics, sorting_weight: 2}
+      unit_of_measurement: "%"
+      accuracy_decimals: 0
+      filters:
+        - lambda: return x * 100.0f / heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
     block:
-      name: Volture heap largest block
+      name: Memory largest block
       web_server: {sorting_group_id: volture_diagnostics, sorting_weight: 3}
+      unit_of_measurement: "%"
+      accuracy_decimals: 0
+      filters:
+        - lambda: return x * 100.0f / heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
     min_free:
-      name: Volture heap min free
+      name: Memory lowest free
       web_server: {sorting_group_id: volture_diagnostics, sorting_weight: 4}
+      unit_of_measurement: "%"
+      accuracy_decimals: 0
+      filters:
+        - lambda: return x * 100.0f / heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
+
+binary_sensor:
+  - platform: template
+    id: shelly_valid
+    name: Reading valid
+    web_server: {sorting_group_id: shelly, sorting_weight: 7}
 
 text_sensor:
+  - platform: uptime
+    name: Uptime
+    web_server: {sorting_group_id: volture_settings, sorting_weight: 4}
+  - platform: template
+    name: Scheduled reboot
+    web_server: {sorting_group_id: volture_settings, sorting_weight: 5}
+    icon: mdi:restart
+    update_interval: 1h
+    lambda: |-
+      const int hour = ${scheduled_reboot_hour};
+      if (hour < 0) {
+        return std::string("off");
+      }
+      char text[32];
+      snprintf(text, sizeof(text), "%02d:00 if unplugged", hour);
+      return std::string(text);
   - platform: template
     id: volture_decision
-    name: Volture decision
-    web_server: {sorting_group_id: volture_live, sorting_weight: 4}
+    name: Decision
+    web_server: {sorting_group_id: volture_live, sorting_weight: 2}
     update_interval: never
   - platform: template
     id: volture_event
-    name: Volture event
-    web_server: {sorting_group_id: volture_live, sorting_weight: 5}
+    name: Event
+    web_server: {sorting_group_id: volture_live, sorting_weight: 3}
     update_interval: never
   - platform: template
     id: grafana_status
-    name: Volture Grafana push status
+    name: Grafana push status
     web_server: {sorting_group_id: volture_diagnostics, sorting_weight: 1}
     update_interval: never
 
@@ -201,9 +321,13 @@ script:
     mode: single
     then:
       - lambda: |-
-          std::optional<volture::Reading> reading;
+          std::optional<volture_device::ShellyEm> shelly;
           if (!id(shelly_body).empty()) {
-            reading = volture_device::parse_shelly(id(shelly_body));
+            shelly = volture_device::parse_shelly(id(shelly_body));
+          }
+          std::optional<volture::Reading> reading;
+          if (shelly) {
+            reading = volture_device::reading_of(*shelly);
           }
           auto observed = volture_device::observe();
           auto &loop = volture_device::loop();
@@ -224,8 +348,21 @@ script:
             }
           }
           const bool valid = reading && reading->valid;
-          id(house_power).publish_state(valid ? reading->power_w : NAN);
-          id(grid_voltage).publish_state(valid && reading->voltage_v ? *reading->voltage_v : NAN);
+          const volture_device::ShellyEm none;
+          const auto &em = shelly ? *shelly : none;  // shown as replied, even when not valid; all NAN: no reply
+          volture_device::publish_changed(id(shelly_power), em.power_w);
+          volture_device::publish_changed(id(shelly_voltage), em.voltage_v);
+          volture_device::publish_changed(id(shelly_reactive), em.reactive_var);
+          volture_device::publish_changed(id(shelly_pf), em.pf);
+          volture_device::publish_changed(id(shelly_total), em.total_wh);
+          volture_device::publish_changed(id(shelly_total_returned), em.total_returned_wh);
+          id(shelly_valid).publish_state(valid);
+          const auto sum = volture_device::summary(em.power_w, em.voltage_v,
+              volture_device::value_of<esphome::sensor::Sensor>(esphome::App.get_sensors(), "Charger Current"),
+              volture_device::plugged());
+          volture_device::publish_changed(id(total_power), sum.total_w);
+          volture_device::publish_changed(id(tesla_power), sum.tesla_w);
+          volture_device::publish_changed(id(house_power), sum.house_w);
           id(volture_amps).publish_state(loop.ctrl.charging ? loop.ctrl.amps : 0);
           const std::string decision = std::string(loop.ctrl.reason) + (sent == "would send: " ? "" : " · " + sent);
           if (id(volture_decision).state != decision) {
@@ -277,14 +414,24 @@ interval:
             then:
               - lambda: id(shelly_body) = std::string();
               - script.execute: volture_cycle
-  # Grafana push: the lines buffered since the last push, once a minute, while "Grafana push" is on.
+  # Grafana push: the lines buffered since the last push, once a minute, while "Grafana push" is on,
+  # and only with enough free memory for HTTPS (esp32/device.h, memory_for_push).
   - interval: 60s
     then:
       - if:
           condition:
             lambda: |-
-              return id(grafana_push).state && !std::string("${grafana_url}").empty() &&
-                     !volture_device::telemetry().buffer.empty();
+              if (!id(grafana_push).state || std::string("${grafana_url}").empty() ||
+                  volture_device::telemetry().buffer.empty()) {
+                return false;
+              }
+              if (!volture_device::memory_for_push()) {
+                id(grafana_status).publish_state("skipped: low memory");
+                ESP_LOGW("volture", "grafana push skipped: heap_free=%u heap_block=%u",
+                         heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+                return false;
+              }
+              return true;
           then:
             - lambda: |-
                 id(grafana_body).swap(volture_device::telemetry().buffer);  // what is not sent now is lost

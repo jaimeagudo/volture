@@ -17,6 +17,9 @@ substitutions:
   grafana_token: !secret grafana_token
   # Local hour (0-23) of the daily reboot, only while the car is unplugged; -1 = never.
   scheduled_reboot_hour: !secret scheduled_reboot_hour
+  # true: the Shelly's clamp is on the main feed and measures the car too. false: the Shelly is on the
+  # house circuit only; the car's draw is added to it (esp32/device.h, reading_of). Crucial for the limit.
+  shelly_includes_tesla: !secret shelly_includes_tesla
 
 packages:
   yoziru.esphome-tesla-ble:
@@ -288,6 +291,13 @@ text_sensor:
     name: Uptime
     web_server: {sorting_group_id: volture_settings, sorting_weight: 4}
   - platform: template
+    name: Shelly includes Tesla
+    web_server: {sorting_group_id: volture_settings, sorting_weight: 3.5}
+    icon: mdi:transmission-tower
+    update_interval: 1h
+    lambda: |-
+      return std::string(volture_device::flag("${shelly_includes_tesla}") ? "yes (main feed)" : "no (house only)");
+  - platform: template
     name: Scheduled reboot
     web_server: {sorting_group_id: volture_settings, sorting_weight: 5}
     icon: mdi:restart
@@ -325,12 +335,15 @@ script:
           if (!id(shelly_body).empty()) {
             shelly = volture_device::parse_shelly(id(shelly_body));
           }
-          std::optional<volture::Reading> reading;
-          if (shelly) {
-            reading = volture_device::reading_of(*shelly);
-          }
           auto observed = volture_device::observe();
           auto &loop = volture_device::loop();
+          std::optional<volture::Reading> reading;  // the whole load, car included
+          std::optional<volture::Reading> measured;  // what the Shelly itself measured (Grafana)
+          if (shelly) {
+            reading = volture_device::reading_of(*shelly, volture_device::flag("${shelly_includes_tesla}"),
+                                                 volture_device::car_amps(observed, loop.ctrl));
+            measured = volture_device::reading_of(*shelly, true, 0);
+          }
           auto cycle = loop.step(volture_device::now_s(), reading, observed, id(volture_control).state);
           std::string sent = cycle.dry_run ? "would send: " : "";
           for (const auto &cmd : {cycle.resend, cycle.command}) {
@@ -359,7 +372,7 @@ script:
           id(shelly_valid).publish_state(valid);
           const auto sum = volture_device::summary(em.power_w, em.voltage_v,
               volture_device::value_of<esphome::sensor::Sensor>(esphome::App.get_sensors(), "Charger Current"),
-              volture_device::plugged());
+              volture_device::plugged(), volture_device::flag("${shelly_includes_tesla}"));
           volture_device::publish_changed(id(total_power), sum.total_w);
           volture_device::publish_changed(id(tesla_power), sum.tesla_w);
           volture_device::publish_changed(id(house_power), sum.house_w);
@@ -379,7 +392,7 @@ script:
           if (id(grafana_push).state && clock.is_valid() && !std::string("${grafana_url}").empty()) {
             using namespace esphome;
             volture_device::Sample sample;
-            sample.reading = reading;
+            sample.reading = measured;
             sample.car = observed;
             sample.car_current_a = volture_device::value_of<sensor::Sensor>(App.get_sensors(), "Charger Current");
             sample.car_power_kw = volture_device::value_of<sensor::Sensor>(App.get_sensors(), "Charger Power");

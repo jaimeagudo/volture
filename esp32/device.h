@@ -111,11 +111,34 @@ inline std::optional<ShellyEm> parse_shelly(const std::string &body) {
   return shelly;
 }
 
-// What the controller needs from the Shelly.
-inline volture::Reading reading_of(const ShellyEm &shelly) {
+// A true/false setting from secrets.yaml as substituted into esp32.yaml ("True", "true", "yes"...).
+inline bool flag(const std::string &text) {
+  std::string lower;
+  for (char c : text) {
+    lower += static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  }
+  return lower == "true" || lower == "yes" || lower == "on" || lower == "1";
+}
+
+// Amps the car may be drawing: the higher of its reported setpoint and Volture's own belief, so a
+// command the car has not confirmed yet already counts. A car drawing less than its setpoint (tapering
+// near full) only makes the estimate high, which errs on the safe side.
+inline int car_amps(const std::optional<volture::CarState> &observed, const volture::Controller &ctrl) {
+  const int reported = observed && observed->charging ? observed->amps : 0;
+  const int believed = ctrl.charging ? ctrl.amps : 0;
+  return std::max(reported, believed);
+}
+
+// What the controller needs from the Shelly: the WHOLE load it must keep under the contracted power.
+// shelly_includes_tesla (secrets.yaml): true when the clamp is on the main feed and sees the car too;
+// false when the Shelly is on the house circuit only, and the car's draw (amps x volts) is added.
+inline volture::Reading reading_of(const ShellyEm &shelly, bool includes_tesla, int amps_of_car) {
   volture::Reading reading{shelly.power_w, shelly.valid, std::nullopt};
   if (!std::isnan(shelly.voltage_v)) {
     reading.voltage_v = shelly.voltage_v;
+  }
+  if (!includes_tesla) {
+    reading.power_w += amps_of_car * volture::effective_voltage(config(), reading);
   }
   return reading;
 }
@@ -350,14 +373,15 @@ inline void arrange_page(esphome::web_server::WebServer *web) {
   arrange(web, App.get_climates(), false);
 }
 
-// The page's Summary: where the power measured by the Shelly goes. NAN where it cannot be known.
+// The page's Summary, from what the car reports it draws. NAN where it cannot be known.
 struct Summary {
-  float total_w;  // the whole house including the car = Shelly power
+  float total_w;  // house + Tesla
   float tesla_w;  // car current (as the car reports it) x Shelly voltage
-  float house_w;  // total - Tesla
+  float house_w;  // everything but the car
 };
 
-inline Summary summary(float shelly_power_w, float shelly_voltage_v, float car_current_a, std::optional<bool> car_plugged) {
+inline Summary summary(float shelly_power_w, float shelly_voltage_v, float car_current_a, std::optional<bool> car_plugged,
+                       bool includes_tesla) {
   float car_a = car_current_a;
   // No current reported and the cable not known to be in: the car is unplugged or out of Bluetooth
   // range, which almost always means not at home (owner's choice: count it as 0 W).
@@ -365,7 +389,10 @@ inline Summary summary(float shelly_power_w, float shelly_voltage_v, float car_c
     car_a = 0;
   }
   const float tesla_w = car_a * shelly_voltage_v;
-  return Summary{shelly_power_w, tesla_w, shelly_power_w - tesla_w};
+  if (includes_tesla) {
+    return Summary{shelly_power_w, tesla_w, shelly_power_w - tesla_w};
+  }
+  return Summary{shelly_power_w + tesla_w, tesla_w, shelly_power_w};
 }
 
 // Publish only when the value changes: every publish is an event sent to every open page.

@@ -4,7 +4,7 @@
 
 **Charge a Tesla at home as fast as possible without ever tripping the house's contracted power limit.**
 
-A **Shelly EM** clamp on the main feed measures what the whole house draws. Every second, an **ESP32** next to the car reads it, decides how many amps (5–32 A) the car may use right now, and tells the car over Bluetooth Low Energy (BLE). When the oven turns on, the car slows down; when it turns off, the car speeds up again.
+A **Shelly EM** clamp on the main feed measures what the whole house draws. Every second, an **ESP32** next to the car reads it, decides how many amps (5–32 A) the car may use right now, and tells the car over Bluetooth Low Energy (BLE), using [yoziru/esphome-tesla-ble](https://github.com/yoziru/esphome-tesla-ble) (see [Credits](#credits)). When the oven turns on, the car slows down; when it turns off, the car speeds up again.
 
 **Only two devices: the ESP32 and the Shelly EM.** No Home Assistant, no server, no computer running 24/7, no cloud. A computer is needed once, to flash the ESP32; after that it runs on its own, with a live web page at `http://volture.local`.
 
@@ -439,6 +439,10 @@ Solar-surplus mode · history and charts ([issue #12](https://github.com/jaimeag
 | 2026-10-15 | #11   | C++ loop running on the ESP32, observe-only by default; web page with live JSON (decisions 15–16); HTTPS memory measured                                          |
 | 2026-10-15 | #15   | HTTPS test removed; decisions documented; issues #12–#14 opened                                                                                                   |
 | 2026-10-15 | this  | Optional Grafana push, one switch on the web page (decision 17)                                                                                                   |
+
+## Credits
+
+Volture stands on [**yoziru/esphome-tesla-ble**](https://github.com/yoziru/esphome-tesla-ble) by [yoziru](https://github.com/yoziru): the ESPHome firmware that pairs an ESP32 with a Tesla and talks to it over BLE. Everything Volture does with the car (read its state, set the amps, stop and resume charging) goes through it. `esp32.yaml` pulls it from GitHub at a pinned release; it is licensed under AGPL-3.0. Thank you, yoziru.
 
 ## License
 

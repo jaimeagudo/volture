@@ -11,7 +11,9 @@ substitutions:
   volture_settings: !secret volture
   # Firmware release. Each release states the minimum ESPHome version; keep pyproject.toml in sync.
   tesla_ble_ref: v2026.10.1
-  ble_mac_address: !secret ble_mac_address
+  # The firmware needs a MAC to compile; this one matches no device. The real one is found from the VIN
+  # at run time (esp32/car_finder.yaml).
+  ble_mac_address: "00:00:00:00:00:00"
   tesla_vin: !secret tesla_vin
   # Grafana Cloud push (README: Grafana). Empty grafana_url: nothing is ever sent.
   grafana_url: !secret grafana_url
@@ -32,6 +34,7 @@ packages:
     ref: ${tesla_ble_ref}
     # Classic ESP32 (Elegoo board, chip ESP32-D0WD-V3, 4 MB flash).
     files: [tesla-ble-esp32-generic.dashboard.yml]
+  volture.car_finder: !include esp32/car_finder.yaml
 
 esphome:
   name: volture
@@ -39,6 +42,7 @@ esphome:
   includes: # Volture's control loop, see the end of this file
     - esp32/controller.h
     - esp32/device.h
+    - esp32/car_finder.h
   on_boot:
     # Before any page or API client connects: hide every car control and non-charging reading, and put
     # the car's charging readings in a "Tesla" section (esp32/device.h, arrange_page, says why).
@@ -61,6 +65,9 @@ esphome:
           volture_device::loop_settings().confirm_timeout_s = ${volture_settings.confirm_timeout_s};
           volture_device::loop_settings().confirm_max_attempts = ${volture_settings.confirm_max_attempts};
           id(contracted_power).publish_state(cfg.contracted_power_w);
+          // The car found on an earlier boot (esp32/car_finder.yaml); 0 = still to find.
+          id(ble_tesla_id)->set_address(id(car_mac));
+          id(car_status).publish_state(volture_car::status_text(id(car_mac)));
 
 # A browser page left open but not read (a phone with the tab in the background) keeps its TCP
 # connection alive, and lwIP holds up to TCP_SND_BUF of unsent data for it until the phone closes it.
@@ -94,11 +101,6 @@ wifi:
       password: !secret wifi2_password
   ap:
     password: !secret wifi_hotspot_password
-
-# Uncomment to find the car's BLE MAC: the log prints "Found Tesla vehicle | ... | MAC: ...".
-# Put that MAC in secrets.yaml (ble_mac_address), comment this block again and reflash.
-# tesla_ble_listener:
-#   vin: !secret tesla_vin
 
 # ---- Volture's control loop, running on the ESP32 itself ----
 # Every second: read the Shelly, read the car's state, run one cycle of esp32/controller.h (volture::Loop),

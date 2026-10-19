@@ -47,16 +47,16 @@ Both devices communicate via Wi-fi
 
 ## Status (October 2026)
 
-| Piece                                        | State                                                                                                                                                                                                |
-| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Control algorithm + tests                    | Done in Python and in C++ (`esp32/controller.h`); the same 24 scenarios pass on both, plus 6 for the C++ cycle on its own; every setting in `secrets.yaml`                                           |
-| Control loop running on the ESP32 itself     | Running, **observe-only by default** (switch "Control" on its web page). Settings: the `volture:` block of `secrets.yaml`; poll interval, headroom and the no-reading fail-safe editable on the page |
-| Observing the ESP32 (web page, live JSON)    | Done: `http://volture.local` (see [Watching the ESP32](#watching-the-esp32)); optional push to Grafana ([Grafana](#grafana-optional))                                                                |
-| Simulator (fake Shelly + fake car, web page) | Done, run end to end                                                                                                                                                                                 |
-| ESP32 firmware                               | Built from `esp32.yaml`, flashed, on Wi-Fi as `volture.local`                                                                                                                                        |
-| Mac → ESP32 commands (`EsphomeCar`)          | Done; ESP32 confirmed receiving "set amps" and "charging on/off"                                                                                                                                     |
-| ESP32 → car                                  | Paired (2026-10-15). First real charge driven by the Mac loop with a simulated Shelly: amps ramp, every command confirmed by the car                                                                 |
-| Shelly EM                                    | Installed; read by the ESP32 every second                                                                                                                                                            |
+| Piece                                        | State                                                                                                                                                                                                                                                 |
+| -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Control algorithm + tests                    | Done in Python and in C++ (`esp32/controller.h`); the same 24 scenarios pass on both, plus 6 for the C++ cycle on its own; every setting in `secrets.yaml`                                                                                            |
+| Control loop running on the ESP32 itself     | Running, **observe-only by default** (switch "Control" on its web page). Settings: the `volture:` block of `secrets.yaml`; Shelly poll interval, headroom, the no-reading fail-safe, the reboot hour and the Grafana memory skip editable on the page |
+| Observing the ESP32 (web page, live JSON)    | Done: `http://volture.local` (see [Watching the ESP32](#watching-the-esp32)); optional push to Grafana ([Grafana](#grafana-optional))                                                                                                                 |
+| Simulator (fake Shelly + fake car, web page) | Done, run end to end                                                                                                                                                                                                                                  |
+| ESP32 firmware                               | Built from `esp32.yaml`, flashed, on Wi-Fi as `volture.local`                                                                                                                                                                                         |
+| Mac → ESP32 commands (`EsphomeCar`)          | Done; ESP32 confirmed receiving "set amps" and "charging on/off"                                                                                                                                                                                      |
+| ESP32 → car                                  | Paired (2026-10-15). First real charge driven by the Mac loop with a simulated Shelly: amps ramp, every command confirmed by the car                                                                                                                  |
+| Shelly EM                                    | Installed; read by the ESP32 every second                                                                                                                                                                                                             |
 
 ---
 
@@ -249,7 +249,8 @@ cp secrets.example.yaml secrets.yaml && open -e secrets.yaml
 | `tesla_vin`                    | The car's VIN (17 characters, in the Tesla app).                                                                                                                                                                                                  |
 | `ble_mac_address`              | The car's Bluetooth **MAC address**, `AA:BB:CC:DD:EE:FF` (digits 0–9 and letters A–F only, so `0` is zero, never the letter `O`). See step 6.                                                                                                     |
 | `shelly_includes_tesla`        | **Crucial for the limit.** `true`: the clamp is on the main feed and measures the car too. `false`: the Shelly is on the house circuit only; the ESP32 adds the car's draw (amps × Shelly voltage) before deciding. Shown under Volture settings. |
-| `scheduled_reboot_hour`        | Local hour (0–23) of the ESP32's daily reboot, skipped while the car is plugged in; `-1`: never. Default 14.                                                                                                                                      |
+| `scheduled_reboot_hour`        | Local hour (0–23) of the ESP32's daily reboot, skipped while the car is plugged in; `-1`: never. Default 14. First-boot value: editable on the web page afterwards.                                                                               |
+| `grafana_skip_below_free_pct`  | Free memory (% of the heap, as the page shows it) below which a Grafana push is skipped; `0`: never skip. Default 14. First-boot value: editable on the web page afterwards.                                                                      |
 | `shelly_url`                   | The real Shelly: `http://SHELLY_IP`. Ignored with `--sim-shelly`.                                                                                                                                                                                 |
 | `volture:` block               | Every setting: `esphome_host`, the power limits, amps, steps and timings. Each line is commented in the template; a missing line keeps its default; a typo or impossible value stops volture at startup with a clear message.                     |
 
@@ -304,28 +305,30 @@ Open **http://volture.local** (phone or Mac, on your Wi-Fi), user `web_user`, pa
 
 One section per data source, so every value says where it comes from. Every car control and every other car reading is hidden from the page and the API: the car is controlled from the Tesla app, and fewer entities keep the page from running the ESP32 out of memory.
 
-| Section                 | Entity                                                                                     | Meaning                                                                                                                                        |
-| ----------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Summary**             | Contracted power                                                                           | The limit the ESP32's loop never exceeds (its built-in setting)                                                                                |
-|                         | Tesla power                                                                                | = Tesla Charger Current × Shelly EM Voltage; 0 when the car is unplugged or out of Bluetooth range                                             |
-|                         | House power                                                                                | Everything but the car: Shelly EM Power − Tesla power if `shelly_includes_tesla` is true, else Shelly EM Power                                 |
-|                         | Total power                                                                                | House power + Tesla power (= Shelly EM Power when the Shelly includes the car)                                                                 |
-| **Shelly EM**           | Power, Voltage, Reactive power, Power factor, Energy total, Energy returned, Reading valid | Every value of the Shelly's `/emeter/0` reply, read every second (empty: no reply)                                                             |
-| **Volture**             | Amps                                                                                       | Amps the loop has decided (0: stopped)                                                                                                         |
-|                         | Decision                                                                                   | Why, e.g. `ramp`, `no_room`, `amps_cap`, `over_limit_drop`, `no_reading_stop`, `idle`; plus what it sent (or *would send* when control is off) |
-|                         | Event                                                                                      | What the car did with the last command: `confirmed`, `waiting`, `resend`, `outside_change`, `dry_run`…                                         |
-| **Volture settings**    | Control (switch)                                                                           | Off (default): observe only, nothing sent to the car. On: the ESP32 drives the car. Kept across reboots                                        |
-|                         | Shelly EM URL (text)                                                                       | Where the ESP32 reads power: the real Shelly EM (`http://<Shelly IP>`), or the Mac's fake one (`http://<Mac IP>:8081`, not `localhost`)        |
-|                         | Poll interval (s)                                                                          | How often the Shelly is read. First boot: `poll_s`; then kept across reboots                                                                   |
-|                         | Headroom (W)                                                                               | Margin kept below the contracted power. First boot: `headroom_w` (default 0)                                                                   |
-|                         | Stop without Shelly (switch)                                                               | Off (default): without a Shelly reading Volture sends nothing, the car carries on. On: minimum amps, then stop                                 |
-|                         | Stop after no reading (s)                                                                  | With Stop without Shelly on: how long without a reading before stopping (`stop_after_invalid_s`)                                               |
-|                         | Grafana push (switch)                                                                      | Off (default): nothing goes to the internet. On: push to Grafana, if configured ([Grafana](#grafana-optional)). Kept across reboots            |
-|                         | Uptime, Scheduled reboot                                                                   | Time since the last start; the daily reboot hour (`scheduled_reboot_hour`), skipped while the car is plugged in                                |
-|                         | Reboot ESP32 (button)                                                                      | Reboots now (~10 s). Unlike the scheduled one it does not check the cable: a charge Volture had paused is then not resumed                     |
-| **Volture diagnostics** | Grafana push status                                                                        | Result of the last push: `ok 204, … B`, `error 401`, `error: no answer`, `skipped: low memory`                                                 |
-|                         | Memory free / largest block / lowest free                                                  | ESP32 memory, % of the whole                                                                                                                   |
-| **Tesla**               | Charger, Charger Current, Charger Power…                                                   | The car's charging readings (names starting "Charg"), as the car reports them over Bluetooth                                                   |
+| Section                 | Entity                                                                                     | Meaning                                                                                                                                         |
+| ----------------------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Summary**             | Contracted power                                                                           | The limit the ESP32's loop never exceeds (its built-in setting)                                                                                 |
+|                         | Tesla power                                                                                | = Tesla Charger Current × Shelly EM Voltage; 0 when the car is unplugged or out of Bluetooth range                                              |
+|                         | House power                                                                                | Everything but the car: Shelly EM Power − Tesla power if `shelly_includes_tesla` is true, else Shelly EM Power                                  |
+|                         | Total power                                                                                | House power + Tesla power (= Shelly EM Power when the Shelly includes the car)                                                                  |
+| **Shelly EM**           | Power, Voltage, Reactive power, Power factor, Energy total, Energy returned, Reading valid | Every value of the Shelly's `/emeter/0` reply, read every second (empty: no reply)                                                              |
+| **Volture**             | Amps                                                                                       | Amps the loop has decided (0: stopped)                                                                                                          |
+|                         | Decision                                                                                   | Why, e.g. `ramp`, `no_room`, `amps_cap`, `over_limit_drop`, `no_reading_stop`, `idle`; plus what it sent (or *would send* when control is off)  |
+|                         | Event                                                                                      | What the car did with the last command: `confirmed`, `waiting`, `resend`, `outside_change`, `dry_run`…                                          |
+| **Volture settings**    | Control (switch)                                                                           | Off (default): observe only, nothing sent to the car. On: the ESP32 drives the car. Kept across reboots                                         |
+|                         | Shelly EM URL (text)                                                                       | Where the ESP32 reads power: the real Shelly EM (`http://<Shelly IP>`), or the Mac's fake one (`http://<Mac IP>:8081`, not `localhost`)         |
+|                         | Shelly poll interval (s)                                                                   | How often the Shelly is read. First boot: `poll_s`; then kept across reboots                                                                    |
+|                         | Headroom (W)                                                                               | Margin kept below the contracted power. First boot: `headroom_w` (default 0)                                                                    |
+|                         | Stop without Shelly (switch)                                                               | Off (default): without a Shelly reading Volture sends nothing, the car carries on. On: minimum amps, then stop                                  |
+|                         | Stop after no reading (s)                                                                  | With Stop without Shelly on: how long without a reading before stopping (`stop_after_invalid_s`)                                                |
+|                         | Grafana push (switch)                                                                      | Off (default): nothing goes to the internet. On: push to Grafana, if configured ([Grafana](#grafana-optional)). Kept across reboots             |
+|                         | Uptime                                                                                     | Time since the last start                                                                                                                       |
+|                         | Scheduled reboot hour (h)                                                                  | Local hour of the daily reboot, skipped while the car is plugged in; `-1`: never. First boot: `scheduled_reboot_hour`; then kept across reboots |
+|                         | Grafana skip below free memory (%)                                                         | A push is skipped while free memory is below this; `0`: never skip. First boot: `grafana_skip_below_free_pct`; then kept across reboots         |
+|                         | Reboot ESP32 (button)                                                                      | Reboots now (~10 s). Unlike the scheduled one it does not check the cable: a charge Volture had paused is then not resumed                      |
+| **Volture diagnostics** | Grafana push status                                                                        | Result of the last push: `ok 204, … B`, `error 401`, `error: no answer`, `skipped: low memory`                                                  |
+|                         | Memory free / largest block / lowest free                                                  | ESP32 memory, % of the whole                                                                                                                    |
+| **Tesla**               | Charger, Charger Current, Charger Power…                                                   | The car's charging readings (names starting "Charg"), as the car reports them over Bluetooth                                                    |
 
 The logo comes from `esp32/web_logo.js`, which embeds `volture-logo.svg` (a test fails if they differ). Renaming an entity in `esp32.yaml` resets its saved value (switches back to off, the Shelly EM URL back to `shelly_url` in `secrets.yaml`).
 
@@ -426,6 +429,15 @@ Import it: in your Grafana, **Dashboards** → **New** → **Import** → *Uploa
 
 ---
 
+## To do
+
+- Install the Shelly (steps 8–9) and run a real charge with it. Check in the log that the car's reported state confirms each command (`car confirmed …`).
+- Measure how often the Shelly Gen1 refreshes `power` (`curl` every second); it bounds how short `poll_s` can be.
+- Confirm the clamp model (50 A or 120 A) covers the house's peak. The installation is single-phase.
+- Hand control to the ESP32 for real ("Control" on) once the real Shelly is in.
+- More settings on the ESP32's page: [issue #13](https://github.com/jaimeagudo/volture/issues/13) (today: poll interval, headroom and the no-reading fail-safe; the rest comes from `secrets.yaml` at build time).
+- A slow car confirmation can be mistaken for a change made in the Tesla app: [issue #14](https://github.com/jaimeagudo/volture/issues/14).
+- Grafana push: run it a few days with a real account and watch `volture_heap_block` and Bluetooth drops ([issue #12](https://github.com/jaimeagudo/volture/issues/12)).
 
 ## Possible improvements
 
@@ -433,7 +445,21 @@ Solar-surplus mode · history and charts ([issue #12](https://github.com/jaimeag
 
 ---
 
-Volture stands on [**yoziru/esphome-tesla-ble**](https://github.com/yoziru/esphome-tesla-ble) by [yoziru](https://github.com/yoziru): the ESPHome firmware that pairs an ESP32 with a Tesla and talks to it over BLE. Everything Volture does with the car (read its state, set the amps, stop and resume charging) goes through it. `esp32.yaml` pulls it from GitHub at a pinned release; it is licensed under AGPL-3.0. Thank you, yoziru.
+## History
+
+| Date       | PR    | What changed                                                                                                                                                      |
+| ---------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2026-10-14 | #1–#2 | Python controller + simulator; ESP32 firmware config (`esp32.yaml`, yoziru/esphome-tesla-ble, `CHARGING_MANAGER` key); real car control through the ESP32         |
+| 2026-10-15 | #3    | Second Wi-Fi; `shelly_url` setting; fake Shelly page; 10 s car command timeout                                                                                    |
+| 2026-10-15 | #4    | `simulator/` folder; every setting in `secrets.yaml`; measured voltage; commands confirmed with the car's reported state (also an off-peak window, removed in #6) |
+| 2026-10-15 | #5    | Project renamed SirWattson → Volture; the Tesla app has priority; never start an unplugged or full car                                                            |
+| 2026-10-15 | #6–#7 | Time-based charging removed for good (decision 12); C++ port `esp32/controller.h`, every scenario run against Python and C++                                      |
+| 2026-10-15 | #8    | Volture never starts a charge, uses every amp that fits (decision 13); `--sim-shelly` / `--sim-car` flags replace `car:`                                          |
+| 2026-10-15 | #9    | Fixed `CoverState` errors and a hang at startup (aioesphomeapi 46.3.0 zeroconf listener bug, worked around)                                                       |
+| 2026-10-15 | #10   | Hard 20 A cap (decision 14); fake Shelly includes the real car's load; no redundant "start"                                                                       |
+| 2026-10-15 | #11   | C++ loop running on the ESP32, observe-only by default; web page with live JSON (decisions 15–16); HTTPS memory measured                                          |
+| 2026-10-15 | #15   | HTTPS test removed; decisions documented; issues #12–#14 opened                                                                                                   |
+| 2026-10-15 | this  | Optional Grafana push, one switch on the web page (decision 17)                                                                                                   |
 
 ## License
 

@@ -485,6 +485,10 @@ GPL-3.0. Copyright (C) 2026 Jaime Agudo, [github.com/jaimeagudo/volture](https:/
 - [aioesphomeapi](https://github.com/esphome/aioesphomeapi): Python client for the ESPHome native API
 - [ESPHome native API](https://esphome.io/components/api/) · [uv](https://docs.astral.sh/uv/)
 
+## Credits
+
+- https://github.com/yoziru/esphome-tesla-ble/
+
 ## Disclaimer
 
 As an Amazon Associate, I earn from qualifying purchases to help offset the costs of development and maintenance of this project, the price you pay is unaffected

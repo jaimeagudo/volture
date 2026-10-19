@@ -7,7 +7,7 @@ dependencies = ["aiohttp>=3.9", "aioesphomeapi>=24", "pyyaml>=6"]
 
 [dependency-groups]
 # esphome builds/flashes esp32.yaml; pinned to the minimum the firmware release in esp32.yaml requires.
-dev = ["pytest>=8", "esphome==2026.9.1"]
+dev = ["pytest>=8", "esphome==2026.9.1", "pre-commit>=4"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

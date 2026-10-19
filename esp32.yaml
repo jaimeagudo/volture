@@ -395,6 +395,12 @@ binary_sensor:
     web_server: { sorting_group_id: shelly, sorting_weight: 7 }
 
 text_sensor:
+  # Why the last start happened (power-on, software reset, panic, watchdog, brownout...): tells a
+  # deliberate reboot from a crash when Uptime looks short.
+  - platform: debug
+    reset_reason:
+      name: Reset reason
+      web_server: { sorting_group_id: volture_settings, sorting_weight: 4.5 }
   - platform: uptime
     name: Uptime
     web_server: { sorting_group_id: volture_settings, sorting_weight: 4 }

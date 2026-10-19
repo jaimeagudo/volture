@@ -426,15 +426,6 @@ Import it: in your Grafana, **Dashboards** → **New** → **Import** → *Uploa
 
 ---
 
-## To do
-
-- Install the Shelly (steps 8–9) and run a real charge with it. Check in the log that the car's reported state confirms each command (`car confirmed …`).
-- Measure how often the Shelly Gen1 refreshes `power` (`curl` every second); it bounds how short `poll_s` can be.
-- Confirm the clamp model (50 A or 120 A) covers the house's peak. The installation is single-phase.
-- Hand control to the ESP32 for real ("Control" on) once the real Shelly is in.
-- More settings on the ESP32's page: [issue #13](https://github.com/jaimeagudo/volture/issues/13) (today: poll interval, headroom and the no-reading fail-safe; the rest comes from `secrets.yaml` at build time).
-- A slow car confirmation can be mistaken for a change made in the Tesla app: [issue #14](https://github.com/jaimeagudo/volture/issues/14).
-- Grafana push: run it a few days with a real account and watch `volture_heap_block` and Bluetooth drops ([issue #12](https://github.com/jaimeagudo/volture/issues/12)).
 
 ## Possible improvements
 
@@ -442,21 +433,7 @@ Solar-surplus mode · history and charts ([issue #12](https://github.com/jaimeag
 
 ---
 
-## History
-
-| Date       | PR    | What changed                                                                                                                                                      |
-| ---------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 2026-10-14 | #1–#2 | Python controller + simulator; ESP32 firmware config (`esp32.yaml`, yoziru/esphome-tesla-ble, `CHARGING_MANAGER` key); real car control through the ESP32         |
-| 2026-10-15 | #3    | Second Wi-Fi; `shelly_url` setting; fake Shelly page; 10 s car command timeout                                                                                    |
-| 2026-10-15 | #4    | `simulator/` folder; every setting in `secrets.yaml`; measured voltage; commands confirmed with the car's reported state (also an off-peak window, removed in #6) |
-| 2026-10-15 | #5    | Project renamed SirWattson → Volture; the Tesla app has priority; never start an unplugged or full car                                                            |
-| 2026-10-15 | #6–#7 | Time-based charging removed for good (decision 12); C++ port `esp32/controller.h`, every scenario run against Python and C++                                      |
-| 2026-10-15 | #8    | Volture never starts a charge, uses every amp that fits (decision 13); `--sim-shelly` / `--sim-car` flags replace `car:`                                          |
-| 2026-10-15 | #9    | Fixed `CoverState` errors and a hang at startup (aioesphomeapi 46.3.0 zeroconf listener bug, worked around)                                                       |
-| 2026-10-15 | #10   | Hard 20 A cap (decision 14); fake Shelly includes the real car's load; no redundant "start"                                                                       |
-| 2026-10-15 | #11   | C++ loop running on the ESP32, observe-only by default; web page with live JSON (decisions 15–16); HTTPS memory measured                                          |
-| 2026-10-15 | #15   | HTTPS test removed; decisions documented; issues #12–#14 opened                                                                                                   |
-| 2026-10-15 | this  | Optional Grafana push, one switch on the web page (decision 17)                                                                                                   |
+Volture stands on [**yoziru/esphome-tesla-ble**](https://github.com/yoziru/esphome-tesla-ble) by [yoziru](https://github.com/yoziru): the ESPHome firmware that pairs an ESP32 with a Tesla and talks to it over BLE. Everything Volture does with the car (read its state, set the amps, stop and resume charging) goes through it. `esp32.yaml` pulls it from GitHub at a pinned release; it is licensed under AGPL-3.0. Thank you, yoziru.
 
 ## License
 

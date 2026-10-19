@@ -1,0 +1,44 @@
+# Finds the car by itself from the VIN: no Bluetooth MAC to look up. Included by esp32.yaml (packages).
+#
+# The upstream firmware connects to a MAC fixed at compile time (esp32.yaml sets a placeholder that matches
+# nothing). Here the ESP32 listens for the car's advertised name (derived from the VIN), keeps the first
+# match in flash and hands it to the Bluetooth client. A known MAC is never searched again on its own:
+# press "Find car" if the car's address ever changes.
+
+globals:
+  - id: car_mac # 0 = not found yet. Kept across reboots.
+    type: uint64_t
+    restore_value: true
+    initial_value: "0"
+
+esp32_ble_tracker:
+  on_ble_advertise:
+    - then:
+        - lambda: |-
+            if (id(car_mac) != 0 || !volture_car::is_car(x.get_name(), "${tesla_vin}")) {
+              return;
+            }
+            id(car_mac) = x.address_uint64();
+            id(ble_tesla_id)->set_address(id(car_mac));
+            id(car_status).publish_state(volture_car::status_text(id(car_mac)));
+            ESP_LOGI("volture", "Found the car: %s", volture_car::mac_text(id(car_mac)).c_str());
+
+text_sensor:
+  - platform: template
+    id: car_status
+    name: Car
+    web_server: { sorting_group_id: summary, sorting_weight: 5 }
+    icon: mdi:car-connected
+    entity_category: diagnostic
+
+button:
+  - platform: template
+    name: Find car
+    web_server: { sorting_group_id: summary, sorting_weight: 6 }
+    icon: mdi:magnify
+    on_press:
+      - lambda: |-
+          id(ble_tesla_id)->disconnect();
+          id(ble_tesla_id)->set_address(0);
+          id(car_mac) = 0;
+          id(car_status).publish_state(volture_car::status_text(0));

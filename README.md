@@ -35,10 +35,10 @@ Both devices communicate via Wi-fi
 ## Software
 
 1. `git clone https://github.com/jaimeagudo/volture.git && cd volture && uv sync` ([uv](https://docs.astral.sh/uv/))
-2. `cp secrets.example.yaml secrets.yaml` and fill it in: Wi-Fi, web login, the car's VIN and Bluetooth MAC ([step 4](#4-fill-in-the-secrets), [step 6](#6-find-the-cars-bluetooth-mac-address)).
+2. `cp secrets.example.yaml secrets.yaml` and fill it in: Wi-Fi, web login, and the car's VIN ([step 4](#4-fill-in-the-secrets)).
 3. Plug the ESP32 in over USB: `uv run esphome run esp32.yaml --device /dev/cu.usbserial-0001` ([step 5](#5-flash-the-esp32-first-time-over-usb)).
-4. In the car: open `http://volture.local`, press **Pair BLE Key** (Tesla section), tap the key card on the console ([step 7](#7-pair-the-esp32-with-the-car-in-the-car)).
-5. Install the Shelly EM on the main feed, put its address in **Shelly EM URL** on the page ([step 8](#8-install-the-shelly-em)).
+4. In the car: open `http://volture.local`, press **Pair BLE Key** (Tesla section), tap the key card on the console ([step 6](#6-pair-the-esp32-with-the-car-in-the-car)).
+5. Install the Shelly EM on the main feed, put its address in **Shelly EM URL** on the page ([step 7](#7-install-the-shelly-em)).
 6. Switch **Control** on (Volture settings). Start charging from the Tesla app as usual; Volture keeps the amps under the limit.
 
 > **Safety:** this is a load *manager*, not a protection device. It does not replace the utility's power limiter or the breakers. Every failure mode is designed to end in "charge less" or "stop charging" (see [Fail-safe](#fail-safe)).
@@ -249,7 +249,6 @@ cp secrets.example.yaml secrets.yaml && open -e secrets.yaml
 | `wifi_hotspot_password`        | 8+ characters. The ESP32 opens its own Wi-Fi with it if it cannot join yours.                                                                                                                                                                     |
 | `api_encryption_key`           | Encrypts Mac ↔ ESP32 traffic. Generate it with the command in the template.                                                                                                                                                                       |
 | `tesla_vin`                    | The car's VIN (17 characters, in the Tesla app).                                                                                                                                                                                                  |
-| `ble_mac_address`              | The car's Bluetooth **MAC address**, `AA:BB:CC:DD:EE:FF` (digits 0–9 and letters A–F only, so `0` is zero, never the letter `O`). See step 6.                                                                                                     |
 | `shelly_includes_tesla`        | **Crucial for the limit.** `true`: the clamp is on the main feed and measures the car too. `false`: the Shelly is on the house circuit only; the ESP32 adds the car's draw (amps × Shelly voltage) before deciding. Shown under Volture settings. |
 | `scheduled_reboot_hour`        | Local hour (0–23) of the ESP32's daily reboot, skipped while the car is plugged in; `-1`: never. Default 14. First-boot value: editable on the web page afterwards.                                                                               |
 | `grafana_skip_below_free_pct`  | Free memory (% of the heap, as the page shows it) below which a Grafana push is skipped; `0`: never skip. Default 14. First-boot value: editable on the web page afterwards.                                                                      |
@@ -274,30 +273,23 @@ cp secrets.example.yaml secrets.yaml && open -e secrets.yaml
 
 Later updates go over Wi-Fi: `uv run esphome run esp32.yaml --device volture.local`.
 
-### 6. Find the car's Bluetooth MAC address
+### 6. Pair the ESP32 with the car (in the car)
 
-The car constantly advertises a Bluetooth name derived from the VIN: `S` + 16 hex characters + `C`. You need the **MAC address** of that advertisement, not the name.
-
-- **Android (easiest):** install **nRF Connect**, scan next to the car, find the 18-character `S…C` name, copy the MAC shown under it.
-- **No Android** (iPhones hide MAC addresses): in `esp32.yaml`, uncomment the `tesla_ble_listener` block, flash, take the ESP32 next to the car and watch the log for `Found Tesla vehicle | Name: … | MAC: …`. Put the MAC in `secrets.yaml`, comment the block again and flash again.
-
-### 7. Pair the ESP32 with the car (in the car)
-
-1. Sit in the car with the ESP32 powered and within Bluetooth range, and your phone on the same Wi-Fi.
-2. Open `http://volture.local` and press **Pair BLE Key** (Tesla section).
+1. Sit in the car with the ESP32 powered and within Bluetooth range, and your phone on the same Wi-Fi. The ESP32 finds the car by itself from the VIN and remembers it; **Car** (Summary) shows its Bluetooth address, or `Searching...` until it is found.
+2. Open `http://volture.local` and press **Pair BLE Key** (Tesla section). If the car's Bluetooth address ever changes, press **Find car** (Summary) to search again.
 3. **Immediately** tap the NFC key card on the centre console and confirm the prompt on the car's screen.
 4. Check *Controls → Locks*: a new key ("Unknown device") appears. Rename it to "volture" if you like.
 
 The key is paired with the **`CHARGING_MANAGER`** role (set in `esp32.yaml`): it can start/stop charging and set amps, but cannot unlock or drive. Changing the role requires pairing again.
 
-### 8. Install the Shelly EM
+### 7. Install the Shelly EM
 
 1. Power the Shelly, join its Wi-Fi `shellyem-XXXXXXXXXXXX`, open `http://192.168.33.1/` and enter your Wi-Fi.
 2. Reserve a **fixed IP** for it in your router; update its firmware.
 3. Put the clamp around **one single conductor** of the main feed (not phase and neutral together: they cancel out). **If you are not comfortable working in the electrical panel, have an electrician do it.**
 4. Check: `curl http://SHELLY_IP/emeter/0` returns `power`, `voltage`, `is_valid`. Switch on a known load (a heater): `power` must rise by that amount and be **positive**. Negative means the clamp is backwards.
 
-### 9. Run for real
+### 8. Run for real
 
 On `http://volture.local`, put `http://SHELLY_IP` in **Shelly EM URL** and check the **Shelly EM** section shows live values. Then switch **Control** on (Volture settings). Start charging as usual (Tesla app or the car's schedule); Volture takes it from there. The computer is no longer needed.
 
@@ -427,7 +419,7 @@ Import it: in your Grafana, **Dashboards** → **New** → **Import** → *Uploa
 | `Timeout while resolving IP address for volture.local`                                            | The Mac has not discovered the new name yet; retry, or set `esphome_host` to the ESP32's IP                                                                                      |
 | `ESP32 not connected` / `car state unavailable` all the time, though `ping volture.local` answers | Weak ESP32 Wi-Fi: small packets pass, large ones are lost (check `ping -s 1400 volture.local`). Move the ESP32 or the router closer; aim for a `WiFi Signal` above about -75 dBm |
 | ESP32 log: `Command failed: … Connection lost`                                                    | Car out of Bluetooth range, asleep, or not paired yet                                                                                                                            |
-| Pairing: no prompt on the car                                                                     | Wrong MAC/VIN in `secrets.yaml`, or the NFC card was not tapped right away                                                                                                       |
+| Pairing: no prompt on the car                                                                     | Wrong VIN in `secrets.yaml` (**Car** stays `Searching...`), or the NFC card was not tapped right away                                                                                                     |
 | Upload ends with `Finishing update failed`                                                        | Firmware built for another board; this board needs `tesla-ble-esp32-generic`                                                                                                     |
 | Controller drops to 5 A then stops                                                                | Shelly unreachable or `is_valid: false` (intended fail-safe)                                                                                                                     |
 

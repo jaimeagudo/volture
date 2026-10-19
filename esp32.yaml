@@ -78,6 +78,9 @@ tesla_ble_vehicle:
   role: CHARGING_MANAGER
 
 api:
+  # The default (15 min) reboots the ESP32 whenever no API client (Mac, `esphome logs`) is connected;
+  # the control loop must run on its own, so never.
+  reboot_timeout: 0s
   encryption:
     key: !secret api_encryption_key
 

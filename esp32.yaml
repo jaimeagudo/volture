@@ -266,6 +266,15 @@ sensor:
     device_class: power
     accuracy_decimals: 0
     update_interval: never
+  # The car's charge limit (%), read-only: the car's own "Charging Limit" is a control, hidden like every
+  # car control (esp32/device.h, arrange). No web_server block: its "Charg" name puts it in the Tesla section.
+  - platform: template
+    id: charge_limit
+    name: Charge limit
+    unit_of_measurement: "%"
+    icon: mdi:battery-charging-100
+    accuracy_decimals: 0
+    update_interval: never  # published by volture_cycle
   # Shelly EM: every value of its /emeter/0 reply (empty: no reading this cycle).
   - platform: template
     id: shelly_power
@@ -451,6 +460,8 @@ script:
           volture_device::publish_changed(id(total_power), sum.total_w);
           volture_device::publish_changed(id(tesla_power), sum.tesla_w);
           volture_device::publish_changed(id(house_power), sum.house_w);
+          volture_device::publish_changed(id(charge_limit),
+              volture_device::value_of<esphome::number::Number>(esphome::App.get_numbers(), volture_device::CHARGING_LIMIT));
           id(volture_amps).publish_state(loop.ctrl.charging ? loop.ctrl.amps : 0);
           const std::string decision = std::string(loop.ctrl.reason) + (sent == "would send: " ? "" : " · " + sent);
           if (id(volture_decision).state != decision) {

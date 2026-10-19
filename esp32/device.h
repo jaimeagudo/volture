@@ -46,7 +46,7 @@ inline volture::Loop &loop() {
   return instance;
 }
 
-// True once every poll_s seconds (the page's Poll interval); the interval timer itself ticks every second.
+// True once every poll_s seconds (the page's Shelly poll interval); the interval timer itself ticks every second.
 inline bool poll_due(float poll_s) {
   static double last = -1e9;
   const double now = now_s();
@@ -314,12 +314,17 @@ inline void record(const Sample &sample, double now, unsigned heap_free, unsigne
 // An HTTPS push needs mbedTLS's 16 KB receive buffer in one block plus ~20 KB more for the handshake.
 // Starting one with less ran the heap out (abort) when several unread pages held memory, so the push
 // waits for the next minute instead (the buffer keeps its lines, bounded by MAX_BUFFER).
-constexpr size_t PUSH_MIN_FREE = 45 * 1024;
 constexpr size_t PUSH_MIN_BLOCK = 32 * 1024;
 
-inline bool memory_for_push() {
-  return heap_caps_get_free_size(MALLOC_CAP_8BIT) >= PUSH_MIN_FREE &&
-         heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= PUSH_MIN_BLOCK;
+// min_free_pct: the page's "Grafana skip below free memory" (% of the whole internal heap, as the
+// "Memory free" reading shows it); 0 = never skip, whatever the memory.
+inline bool memory_for_push(float min_free_pct) {
+  if (min_free_pct <= 0) {
+    return true;
+  }
+  const float free_pct = 100.0f * heap_caps_get_free_size(MALLOC_CAP_INTERNAL) /
+                         heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
+  return free_pct >= min_free_pct && heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) >= PUSH_MIN_BLOCK;
 }
 
 // "Basic base64(user:token)" for the Authorization header; built once, kept for the program's life.
@@ -420,12 +425,12 @@ inline void publish_changed(esphome::sensor::Sensor *sensor, float value) {
   }
 }
 
-// Daily reboot (secrets.yaml scheduled_reboot_hour; -1 = never), called every hour on the hour.
+// Daily reboot (the page's Scheduled reboot hour; -1 = never), called every hour on the hour.
 // Skipped while the cable is plugged in: whether Volture paused the car lives only in RAM
 // (volture::Controller::paused_by_us), so a reboot then would leave that charge never resumed.
 // Unknown cable state (car out of Bluetooth range, i.e. not at home) counts as unplugged.
-inline void reboot_if_due(int reboot_hour, int hour_now) {
-  if (reboot_hour < 0 || hour_now != reboot_hour) {
+inline void reboot_if_due(float reboot_hour, int hour_now) {
+  if (reboot_hour < 0 || std::isnan(reboot_hour) || hour_now != static_cast<int>(reboot_hour)) {
     return;
   }
   if (plugged().value_or(false)) {

@@ -167,7 +167,7 @@ Commands go in the **Terminal** app (`Cmd + Space`, type "Terminal", Enter). Cop
 
 ```bash
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"   # Homebrew
-brew install git uv
+brew install git uv gitleaks
 ```
 
 `uv` installs Python and every dependency, ESPHome included.
@@ -180,6 +180,8 @@ cd ~/github/volture
 uv sync
 uv run pytest -v
 ```
+
+Once per clone, turn on the secret scanner that blocks a commit containing a secret: `uv run pre-commit install` ([`.pre-commit-config.yaml`](.pre-commit-config.yaml), runs `gitleaks` on every commit).
 
 Every scenario runs twice: `[python]` and `[cpp]`. All must pass. Python 3.12–3.14 works. The `[cpp]` runs need a C++17 compiler (`xcode-select --install` on macOS); without one they are skipped.
 
@@ -323,6 +325,7 @@ One section per data source, so every value says where it comes from. Every car 
 |                         | Stop after no reading (s)                                                                  | With Stop without Shelly on: how long without a reading before stopping (`stop_after_invalid_s`)                                                |
 |                         | Grafana push (switch)                                                                      | Off (default): nothing goes to the internet. On: push to Grafana, if configured ([Grafana](#grafana-optional)). Kept across reboots             |
 |                         | Uptime                                                                                     | Time since the last start                                                                                                                       |
+|                         | Reset reason                                                                    | Why the last start happened (power-on, software reset, panic, watchdog, brownout...): a crash shows here, a reboot you asked for says software reset |
 |                         | Scheduled reboot hour (h)                                                                  | Local hour of the daily reboot, skipped while the car is plugged in; `-1`: never. First boot: `scheduled_reboot_hour`; then kept across reboots |
 |                         | Grafana skip below free memory (%)                                                         | A push is skipped while free memory is below this; `0`: never skip. First boot: `grafana_skip_below_free_pct`; then kept across reboots         |
 |                         | Reboot ESP32 (button)                                                                      | Reboots now (~10 s). Unlike the scheduled one it does not check the cable: a charge Volture had paused is then not resumed                      |

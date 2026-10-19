@@ -343,10 +343,10 @@ inline std::string text_of(const char *name) {
 
 // The car firmware creates ~90 entities: every control the paired key allows plus every reading.
 // The web page and the API show only this project's entities (those in a section of esp32.yaml) and the car's
-// charging readings (names starting "Charg"); everything else becomes internal. Why: (1) no car control
-// can be tapped by accident (the owner uses the Tesla app; this loop drives the car through the entities
-// directly, which internal entities still allow); (2) the web server serializes and queues every visible
-// entity for each open page, which ran the heap out (abort in AsyncEventSourceResponse::deferrable_send_state).
+// charging readings (names starting "Charg", plus BATTERY, its state of charge); everything else becomes
+// internal. Why: (1) no car control can be tapped by accident (the owner uses the Tesla app; this loop drives
+// the car through the entities directly, which internal entities still allow); (2) the web server serializes
+// and queues every visible entity for each open page, which ran the heap out (abort in AsyncEventSourceResponse::deferrable_send_state).
 // The car readings that stay go to a "Tesla" section, so every value on the page says where it comes from.
 constexpr uint64_t TESLA_GROUP = 0x7e51a;  // any id not used by esp32.yaml's sorting_groups (hashes of their ids)
 
@@ -365,7 +365,7 @@ template<typename List> void arrange(esphome::web_server::WebServer *web, const 
       continue;
     }
     const auto &name = entity->get_name();
-    if ((read_only && name.starts_with("Charg")) || name == PAIR_BUTTON) {
+    if ((read_only && (name.starts_with("Charg") || name == BATTERY)) || name == PAIR_BUTTON) {
       web->add_entity_config(entity, 50, TESLA_GROUP);
     } else {
       entity->set_internal(true);

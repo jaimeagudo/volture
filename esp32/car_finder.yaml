@@ -26,15 +26,15 @@ esp32_ble_tracker:
 text_sensor:
   - platform: template
     id: car_status
-    name: Car
-    web_server: { sorting_group_id: summary, sorting_weight: 5 }
+    name: Car BT
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 1.1 }
     icon: mdi:car-connected
     entity_category: diagnostic
 
 button:
   - platform: template
-    name: Find car
-    web_server: { sorting_group_id: summary, sorting_weight: 6 }
+    name: Find car BT
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 1.2 }
     icon: mdi:magnify
     on_press:
       - lambda: |-

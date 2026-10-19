@@ -1,6 +1,6 @@
 # Volture
 
-<img src="./volture-logo.svg" width="300" alt="logo">
+<img src="./assets/volture-logo.svg" width="300" alt="logo">
 
 **Charge a Tesla at home scavenging every unused Amp without ever tripping the house's contracted power limit.**
 
@@ -15,9 +15,9 @@
 * [ESP32](https://link.amazon/B08bj02ET)
 
 
-| Phone                               | Desktop                                |
-| ----------------------------------- | -------------------------------------- |
-| ![Volture on a phone](./mobile.png) | ![Volture on a desktop](./desktop.png) |
+| Phone                                      | Desktop                                       | Grafana                                    |
+| ------------------------------------------ | --------------------------------------------- | ------------------------------------------ |
+| ![Volture on a phone](./assets/mobile.gif) | ![Volture on a desktop](./assets/desktop.png) | ![Grafana on mobile](./assets/grafana.gif) |
 
 ## TL;DR
 
@@ -249,21 +249,10 @@ cp secrets.example.yaml secrets.yaml && open -e secrets.yaml
 | `tesla_vin`                    | The car's VIN (17 characters, in the Tesla app).                                                                                                                                                                                                  |
 | `ble_mac_address`              | The car's Bluetooth **MAC address**, `AA:BB:CC:DD:EE:FF` (digits 0–9 and letters A–F only, so `0` is zero, never the letter `O`). See step 6.                                                                                                     |
 | `shelly_includes_tesla`        | **Crucial for the limit.** `true`: the clamp is on the main feed and measures the car too. `false`: the Shelly is on the house circuit only; the ESP32 adds the car's draw (amps × Shelly voltage) before deciding. Shown under Volture settings. |
-<<<<<<< HEAD
 | `scheduled_reboot_hour`        | Local hour (0–23) of the ESP32's daily reboot, skipped while the car is plugged in; `-1`: never. Default 14. First-boot value: editable on the web page afterwards.                                                                               |
 | `grafana_skip_below_free_pct`  | Free memory (% of the heap, as the page shows it) below which a Grafana push is skipped; `0`: never skip. Default 14. First-boot value: editable on the web page afterwards.                                                                      |
 | `shelly_url`                   | The real Shelly: `http://SHELLY_IP`. Ignored with `--sim-shelly`.                                                                                                                                                                                 |
 | `volture:` block               | Every setting: `esphome_host`, the power limits, amps, steps and timings. Each line is commented in the template; a missing line keeps its default; a typo or impossible value stops volture at startup with a clear message.                     |
-||||||| parent of a6b2b9c (feat: Grafana memory skip, scheduled reboot hour and Shelly poll interval editable on the page)
-| `scheduled_reboot_hour`        | Local hour (0–23) of the ESP32's daily reboot, skipped while the car is plugged in; `-1`: never. Default 14.                                                                                                                  |
-| `shelly_url`                   | The real Shelly: `http://SHELLY_IP`. Ignored with `--sim-shelly`.                                                                                                                                                             |
-| `volture:` block               | Every setting: `esphome_host`, the power limits, amps, steps and timings. Each line is commented in the template; a missing line keeps its default; a typo or impossible value stops volture at startup with a clear message. |
-=======
-| `scheduled_reboot_hour`        | Local hour (0–23) of the ESP32's daily reboot, skipped while the car is plugged in; `-1`: never. Default 14. First-boot value: editable on the web page afterwards.                                                                                                                  |
-| `grafana_skip_below_free_pct`  | Free memory (% of the heap, as the page shows it) below which a Grafana push is skipped; `0`: never skip. Default 14. First-boot value: editable on the web page afterwards. |
-| `shelly_url`                   | The real Shelly: `http://SHELLY_IP`. Ignored with `--sim-shelly`.                                                                                                                                                             |
-| `volture:` block               | Every setting: `esphome_host`, the power limits, amps, steps and timings. Each line is commented in the template; a missing line keeps its default; a typo or impossible value stops volture at startup with a clear message. |
->>>>>>> a6b2b9c (feat: Grafana memory skip, scheduled reboot hour and Shelly poll interval editable on the page)
 
 `secrets.yaml` is gitignored: it never reaches GitHub.
 
@@ -462,16 +451,6 @@ Import it: in your Grafana, **Dashboards** → **New** → **Import** → *Uploa
 17. **Grafana push: optional, off by default, one switch** (decided 2026-10-15). The ESP32 sends nothing to the internet unless `grafana_url` is set **and** "Volture Grafana push" is on (web page, kept across reboots). It sends one line per 5-second cycle in which something changed (at least one a minute), batched once a minute; no summaries. Costs 0.6% flash, by trusting only Grafana Cloud's root certificate (DigiCert Global Root G2, `esp32/grafana_ca.pem`) instead of ESP-IDF's whole bundle. Network time (SNTP) is used **only** to timestamp those lines, never by the control logic. Memory is tight during a push (measured ~12.6 KB free at the lowest); watch `volture_heap_block` in Grafana. Details: [issue #12](https://github.com/jaimeagudo/volture/issues/12).
 
 ---
-
-## To do
-
-- Install the Shelly (steps 8–9) and run a real charge with it. Check in the log that the car's reported state confirms each command (`car confirmed …`).
-- Measure how often the Shelly Gen1 refreshes `power` (`curl` every second); it bounds how short `poll_s` can be.
-- Confirm the clamp model (50 A or 120 A) covers the house's peak. The installation is single-phase.
-- Hand control to the ESP32 for real ("Control" on) once the real Shelly is in.
-- More settings on the ESP32's page: [issue #13](https://github.com/jaimeagudo/volture/issues/13) (today: poll interval, headroom and the no-reading fail-safe; the rest comes from `secrets.yaml` at build time).
-- A slow car confirmation can be mistaken for a change made in the Tesla app: [issue #14](https://github.com/jaimeagudo/volture/issues/14).
-- Grafana push: run it a few days with a real account and watch `volture_heap_block` and Bluetooth drops ([issue #12](https://github.com/jaimeagudo/volture/issues/12)).
 
 ## Possible improvements
 

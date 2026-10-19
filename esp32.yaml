@@ -17,8 +17,11 @@ substitutions:
   grafana_url: !secret grafana_url
   grafana_user: !secret grafana_user
   grafana_token: !secret grafana_token
-  # Local hour (0-23) of the daily reboot, only while the car is unplugged; -1 = never.
+  # First-boot values of two settings editable on the page (kept across reboots afterwards):
+  # local hour (0-23) of the daily reboot, only while the car is unplugged (-1 = never), and the free
+  # memory % below which a Grafana push is skipped (0 = never skip).
   scheduled_reboot_hour: !secret scheduled_reboot_hour
+  grafana_skip_below_free_pct: !secret grafana_skip_below_free_pct
   # true: the Shelly's clamp is on the main feed and measures the car too. false: the Shelly is on the
   # house circuit only; the car's draw is added to it (esp32/device.h, reading_of). Crucial for the limit.
   shelly_includes_tesla: !secret shelly_includes_tesla
@@ -147,7 +150,7 @@ time:
       - seconds: 0
         minutes: 0
         then:
-          - lambda: volture_device::reboot_if_due(${scheduled_reboot_hour}, id(sntp_time).now().hour);
+          - lambda: volture_device::reboot_if_due(id(reboot_hour).state, id(sntp_time).now().hour);
 
 button:
   - platform: restart
@@ -184,7 +187,7 @@ switch:
 number:
   - platform: template
     id: poll_interval
-    name: Poll interval
+    name: Shelly poll interval
     web_server: {sorting_group_id: volture_settings, sorting_weight: 2.1}
     icon: mdi:timer-sync-outline
     unit_of_measurement: s
@@ -195,6 +198,32 @@ number:
     optimistic: true
     restore_value: true  # first boot: poll_s from secrets.yaml; then the page's value
     initial_value: ${volture_settings.poll_s}
+  - platform: template
+    id: reboot_hour
+    name: Scheduled reboot hour
+    web_server: {sorting_group_id: volture_settings, sorting_weight: 5}
+    icon: mdi:restart
+    unit_of_measurement: h
+    mode: box
+    min_value: -1
+    max_value: 23
+    step: 1
+    optimistic: true
+    restore_value: true  # first boot: scheduled_reboot_hour from secrets.yaml; -1 = never
+    initial_value: ${scheduled_reboot_hour}
+  - platform: template
+    id: grafana_skip_pct
+    name: Grafana skip below free memory
+    web_server: {sorting_group_id: volture_settings, sorting_weight: 3.1}
+    icon: mdi:memory
+    unit_of_measurement: "%"
+    mode: box
+    min_value: 0
+    max_value: 50
+    step: 1
+    optimistic: true
+    restore_value: true  # first boot: grafana_skip_below_free_pct from secrets.yaml; 0 = never skip
+    initial_value: ${grafana_skip_below_free_pct}
   - platform: template
     id: headroom
     name: Headroom
@@ -373,19 +402,6 @@ text_sensor:
     lambda: |-
       return std::string(volture_device::flag("${shelly_includes_tesla}") ? "yes (main feed)" : "no (house only)");
   - platform: template
-    name: Scheduled reboot
-    web_server: {sorting_group_id: volture_settings, sorting_weight: 5}
-    icon: mdi:restart
-    update_interval: 1h
-    lambda: |-
-      const int hour = ${scheduled_reboot_hour};
-      if (hour < 0) {
-        return std::string("off");
-      }
-      char text[32];
-      snprintf(text, sizeof(text), "%02d:00 if unplugged", hour);
-      return std::string(text);
-  - platform: template
     id: volture_decision
     name: Decision
     web_server: {sorting_group_id: volture_live, sorting_weight: 2}
@@ -499,7 +515,7 @@ script:
           }
 
 interval:
-  # Every second, the Shelly is read once Poll interval (poll_s) has passed.
+  # Every second, the Shelly is read once Shelly poll interval (poll_s) has passed.
   - interval: 1s
     then:
       - if:
@@ -529,7 +545,7 @@ interval:
                   volture_device::telemetry().buffer.empty()) {
                 return false;
               }
-              if (!volture_device::memory_for_push()) {
+              if (!volture_device::memory_for_push(id(grafana_skip_pct).state)) {
                 id(grafana_status).publish_state("skipped: low memory");
                 ESP_LOGW("volture", "grafana push skipped: heap_free=%u heap_block=%u",
                          heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));

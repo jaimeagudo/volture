@@ -36,7 +36,7 @@ packages:
 esphome:
   name: volture
   friendly_name: volture
-  includes:  # Volture's control loop, see the end of this file
+  includes: # Volture's control loop, see the end of this file
     - esp32/controller.h
     - esp32/device.h
   on_boot:
@@ -102,15 +102,15 @@ wifi:
 # send what it decides. With "Volture control" off (the default) it only shows what it would do.
 
 globals:
-  - id: shelly_body  # last /emeter/0 reply; empty = no reading this cycle
+  - id: shelly_body # last /emeter/0 reply; empty = no reading this cycle
     type: std::string
-  - id: grafana_body  # the batch being pushed to Grafana
+  - id: grafana_body # the batch being pushed to Grafana
     type: std::string
 
 # Plain HTTP to the Shelly on the LAN; HTTPS to Grafana Cloud only while "Grafana push" is on.
 http_request:
-  timeout: 2s        # the Shelly is on the LAN: a slow reply is treated as no reading
-  verify_ssl: true   # the Grafana push is HTTPS: its certificate is checked...
+  timeout: 2s # the Shelly is on the LAN: a slow reply is treated as no reading
+  verify_ssl: true # the Grafana push is HTTPS: its certificate is checked...
   # ...against Grafana Cloud's root CA only (DigiCert Global Root G2, valid until 2038) instead of
   # ESP-IDF's bundle of common CAs, which costs ~1% more flash. If Grafana ever changes CA, pushes
   # fail with "error: no answer" on the page; replace this file with the new root.
@@ -122,20 +122,24 @@ web_server:
   id: web_ui
   port: 80
   version: 3
-  ota: false     # firmware updates only through `esphome run` (encrypted), never through the page
+  ota: false # firmware updates only through `esphome run` (encrypted), never through the page
   auth:
-    type: digest  # the password itself never travels (basic would send it nearly in clear)
+    type: digest # the password itself never travels (basic would send it nearly in clear)
     username: !secret web_user
     password: !secret web_password
   # One section per data source, so every value says where it comes from (lower weight = higher).
   # The "Tesla" section (the car's charging readings) is added at boot by arrange_page.
   sorting_groups:
-    - {id: summary, name: "Summary", sorting_weight: -50}
-    - {id: shelly, name: "Shelly EM", sorting_weight: -40}
-    - {id: volture_live, name: "Volture", sorting_weight: -30}
-    - {id: volture_settings, name: "Volture settings", sorting_weight: -20}
-    - {id: volture_diagnostics, name: "Volture diagnostics", sorting_weight: -10}
-  js_include: esp32/web_logo.js  # the Volture logo at the top of the page
+    - { id: summary, name: "Summary", sorting_weight: -50 }
+    - { id: volture_live, name: "Volture status", sorting_weight: -40 }
+    - { id: volture_settings, name: "Volture settings", sorting_weight: -30 }
+    - { id: shelly, name: "Shelly EM", sorting_weight: -20 }
+    - {
+        id: volture_diagnostics,
+        name: "Volture diagnostics",
+        sorting_weight: -10,
+      }
+  js_include: esp32/web_logo.js # the Volture logo at the top of the page
 
 debug:
   update_interval: 5s
@@ -155,40 +159,40 @@ time:
 button:
   - platform: restart
     name: Reboot ESP32
-    web_server: {sorting_group_id: volture_settings, sorting_weight: 6}
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 6 }
 
 switch:
   - platform: template
     id: grafana_push
     name: Grafana push
-    web_server: {sorting_group_id: volture_settings, sorting_weight: 3}
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 3 }
     icon: mdi:chart-line
     optimistic: true
-    restore_mode: RESTORE_DEFAULT_OFF  # off until switched on; then kept across reboots
+    restore_mode: RESTORE_DEFAULT_OFF # off until switched on; then kept across reboots
     on_turn_off:
-      - lambda: volture_device::telemetry() = volture_device::Telemetry();  # free the buffer
+      - lambda: volture_device::telemetry() = volture_device::Telemetry(); # free the buffer
   # Off (default): without a Shelly reading Volture sends nothing; the car carries on as it is.
   # On: it drops to min_amps, then stops after "Stop after no reading".
   - platform: template
     id: stop_without_shelly
     name: Stop without Shelly
-    web_server: {sorting_group_id: volture_settings, sorting_weight: 2.3}
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 2.3 }
     icon: mdi:power-plug-off-outline
     optimistic: true
     restore_mode: ${ 'RESTORE_DEFAULT_ON' if volture_settings.stop_without_reading else 'RESTORE_DEFAULT_OFF' }
   - platform: template
     id: volture_control
     name: Control
-    web_server: {sorting_group_id: volture_settings, sorting_weight: 1}
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 1 }
     icon: mdi:car-electric
     optimistic: true
-    restore_mode: RESTORE_DEFAULT_OFF  # off until switched on; then kept across reboots
+    restore_mode: RESTORE_DEFAULT_OFF # off until switched on; then kept across reboots
 
 number:
   - platform: template
     id: poll_interval
     name: Shelly poll interval
-    web_server: {sorting_group_id: volture_settings, sorting_weight: 2.1}
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 2.1 }
     icon: mdi:timer-sync-outline
     unit_of_measurement: s
     mode: box
@@ -196,12 +200,12 @@ number:
     max_value: 60
     step: 1
     optimistic: true
-    restore_value: true  # first boot: poll_s from secrets.yaml; then the page's value
+    restore_value: true # first boot: poll_s from secrets.yaml; then the page's value
     initial_value: ${volture_settings.poll_s}
   - platform: template
     id: reboot_hour
     name: Scheduled reboot hour
-    web_server: {sorting_group_id: volture_settings, sorting_weight: 5}
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 5 }
     icon: mdi:restart
     unit_of_measurement: h
     mode: box
@@ -209,12 +213,12 @@ number:
     max_value: 23
     step: 1
     optimistic: true
-    restore_value: true  # first boot: scheduled_reboot_hour from secrets.yaml; -1 = never
+    restore_value: true # first boot: scheduled_reboot_hour from secrets.yaml; -1 = never
     initial_value: ${scheduled_reboot_hour}
   - platform: template
     id: grafana_skip_pct
     name: Grafana skip below free memory
-    web_server: {sorting_group_id: volture_settings, sorting_weight: 3.1}
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 3.1 }
     icon: mdi:memory
     unit_of_measurement: "%"
     mode: box
@@ -222,12 +226,12 @@ number:
     max_value: 50
     step: 1
     optimistic: true
-    restore_value: true  # first boot: grafana_skip_below_free_pct from secrets.yaml; 0 = never skip
+    restore_value: true # first boot: grafana_skip_below_free_pct from secrets.yaml; 0 = never skip
     initial_value: ${grafana_skip_below_free_pct}
   - platform: template
     id: headroom
     name: Headroom
-    web_server: {sorting_group_id: volture_settings, sorting_weight: 2.2}
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 2.2 }
     icon: mdi:arrow-collapse-down
     unit_of_measurement: W
     mode: box
@@ -235,12 +239,12 @@ number:
     max_value: 2000
     step: 10
     optimistic: true
-    restore_value: true  # first boot: headroom_w from secrets.yaml
+    restore_value: true # first boot: headroom_w from secrets.yaml
     initial_value: ${volture_settings.headroom_w}
   - platform: template
     id: stop_after_invalid
     name: Stop after no reading
-    web_server: {sorting_group_id: volture_settings, sorting_weight: 2.4}
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 2.4 }
     icon: mdi:timer-off-outline
     unit_of_measurement: s
     mode: box
@@ -248,14 +252,14 @@ number:
     max_value: 600
     step: 5
     optimistic: true
-    restore_value: true  # first boot: stop_after_invalid_s from secrets.yaml
+    restore_value: true # first boot: stop_after_invalid_s from secrets.yaml
     initial_value: ${volture_settings.stop_after_invalid_s}
 
 text:
   - platform: template
     id: shelly_url
     name: Shelly EM URL
-    web_server: {sorting_group_id: volture_settings, sorting_weight: 2}
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 2 }
     mode: text
     optimistic: true
     restore_value: true
@@ -266,15 +270,15 @@ sensor:
   - platform: template
     id: contracted_power
     name: Contracted power
-    web_server: {sorting_group_id: summary, sorting_weight: 1}
+    web_server: { sorting_group_id: summary, sorting_weight: 1 }
     unit_of_measurement: W
     device_class: power
     accuracy_decimals: 0
-    update_interval: never  # a constant: published once at boot (on_boot)
+    update_interval: never # a constant: published once at boot (on_boot)
   - platform: template
     id: total_power
     name: Total power
-    web_server: {sorting_group_id: summary, sorting_weight: 2}
+    web_server: { sorting_group_id: summary, sorting_weight: 2 }
     unit_of_measurement: W
     device_class: power
     accuracy_decimals: 0
@@ -282,7 +286,7 @@ sensor:
   - platform: template
     id: tesla_power
     name: Tesla power
-    web_server: {sorting_group_id: summary, sorting_weight: 3}
+    web_server: { sorting_group_id: summary, sorting_weight: 3 }
     unit_of_measurement: W
     device_class: power
     accuracy_decimals: 0
@@ -290,7 +294,7 @@ sensor:
   - platform: template
     id: house_power
     name: House power
-    web_server: {sorting_group_id: summary, sorting_weight: 4}
+    web_server: { sorting_group_id: summary, sorting_weight: 4 }
     unit_of_measurement: W
     device_class: power
     accuracy_decimals: 0
@@ -303,12 +307,12 @@ sensor:
     unit_of_measurement: "%"
     icon: mdi:battery-charging-100
     accuracy_decimals: 0
-    update_interval: never  # published by volture_cycle
+    update_interval: never # published by volture_cycle
   # Shelly EM: every value of its /emeter/0 reply (empty: no reading this cycle).
   - platform: template
     id: shelly_power
     name: Power
-    web_server: {sorting_group_id: shelly, sorting_weight: 1}
+    web_server: { sorting_group_id: shelly, sorting_weight: 1 }
     unit_of_measurement: W
     device_class: power
     accuracy_decimals: 0
@@ -316,7 +320,7 @@ sensor:
   - platform: template
     id: shelly_voltage
     name: Voltage
-    web_server: {sorting_group_id: shelly, sorting_weight: 2}
+    web_server: { sorting_group_id: shelly, sorting_weight: 2 }
     unit_of_measurement: V
     device_class: voltage
     accuracy_decimals: 1
@@ -324,7 +328,7 @@ sensor:
   - platform: template
     id: shelly_reactive
     name: Reactive power
-    web_server: {sorting_group_id: shelly, sorting_weight: 3}
+    web_server: { sorting_group_id: shelly, sorting_weight: 3 }
     unit_of_measurement: var
     device_class: reactive_power
     accuracy_decimals: 0
@@ -332,14 +336,14 @@ sensor:
   - platform: template
     id: shelly_pf
     name: Power factor
-    web_server: {sorting_group_id: shelly, sorting_weight: 4}
+    web_server: { sorting_group_id: shelly, sorting_weight: 4 }
     device_class: power_factor
     accuracy_decimals: 2
     update_interval: never
   - platform: template
     id: shelly_total
     name: Energy total
-    web_server: {sorting_group_id: shelly, sorting_weight: 5}
+    web_server: { sorting_group_id: shelly, sorting_weight: 5 }
     unit_of_measurement: Wh
     device_class: energy
     accuracy_decimals: 1
@@ -347,7 +351,7 @@ sensor:
   - platform: template
     id: shelly_total_returned
     name: Energy returned
-    web_server: {sorting_group_id: shelly, sorting_weight: 6}
+    web_server: { sorting_group_id: shelly, sorting_weight: 6 }
     unit_of_measurement: Wh
     device_class: energy
     accuracy_decimals: 1
@@ -355,7 +359,7 @@ sensor:
   - platform: template
     id: volture_amps
     name: Amps
-    web_server: {sorting_group_id: volture_live, sorting_weight: 1}
+    web_server: { sorting_group_id: volture_live, sorting_weight: 1 }
     unit_of_measurement: A
     device_class: current
     accuracy_decimals: 0
@@ -364,21 +368,21 @@ sensor:
   - platform: debug
     free:
       name: Memory free
-      web_server: {sorting_group_id: volture_diagnostics, sorting_weight: 2}
+      web_server: { sorting_group_id: volture_diagnostics, sorting_weight: 2 }
       unit_of_measurement: "%"
       accuracy_decimals: 0
       filters:
         - lambda: return x * 100.0f / heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
     block:
       name: Memory largest block
-      web_server: {sorting_group_id: volture_diagnostics, sorting_weight: 3}
+      web_server: { sorting_group_id: volture_diagnostics, sorting_weight: 3 }
       unit_of_measurement: "%"
       accuracy_decimals: 0
       filters:
         - lambda: return x * 100.0f / heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
     min_free:
       name: Memory lowest free
-      web_server: {sorting_group_id: volture_diagnostics, sorting_weight: 4}
+      web_server: { sorting_group_id: volture_diagnostics, sorting_weight: 4 }
       unit_of_measurement: "%"
       accuracy_decimals: 0
       filters:
@@ -388,15 +392,15 @@ binary_sensor:
   - platform: template
     id: shelly_valid
     name: Reading valid
-    web_server: {sorting_group_id: shelly, sorting_weight: 7}
+    web_server: { sorting_group_id: shelly, sorting_weight: 7 }
 
 text_sensor:
   - platform: uptime
     name: Uptime
-    web_server: {sorting_group_id: volture_settings, sorting_weight: 4}
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 4 }
   - platform: template
     name: Shelly includes Tesla
-    web_server: {sorting_group_id: volture_settings, sorting_weight: 3.5}
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 3.5 }
     icon: mdi:transmission-tower
     update_interval: 1h
     lambda: |-
@@ -404,17 +408,17 @@ text_sensor:
   - platform: template
     id: volture_decision
     name: Decision
-    web_server: {sorting_group_id: volture_live, sorting_weight: 2}
+    web_server: { sorting_group_id: volture_live, sorting_weight: 2 }
     update_interval: never
   - platform: template
     id: volture_event
     name: Event
-    web_server: {sorting_group_id: volture_live, sorting_weight: 3}
+    web_server: { sorting_group_id: volture_live, sorting_weight: 3 }
     update_interval: never
   - platform: template
     id: grafana_status
     name: Grafana push status
-    web_server: {sorting_group_id: volture_diagnostics, sorting_weight: 1}
+    web_server: { sorting_group_id: volture_diagnostics, sorting_weight: 1 }
     update_interval: never
 
 script:
@@ -578,4 +582,3 @@ interval:
                         id(grafana_status).publish_state("error: no answer");
                         ESP_LOGW("volture", "grafana push failed: heap_free=%u", heap_caps_get_free_size(MALLOC_CAP_8BIT));
                         id(grafana_body).clear();
-

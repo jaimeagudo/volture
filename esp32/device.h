@@ -4,6 +4,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <optional>
@@ -311,10 +312,13 @@ inline void record(const Sample &sample, double now, unsigned heap_free, unsigne
   t.previous_at = now;
 }
 
-// An HTTPS push needs mbedTLS's 16 KB receive buffer in one block plus ~20 KB more for the handshake.
-// Starting one with less ran the heap out (abort) when several unread pages held memory, so the push
-// waits for the next minute instead (the buffer keeps its lines, bounded by MAX_BUFFER).
-constexpr size_t PUSH_MIN_BLOCK = 32 * 1024;
+// The largest single allocation of an HTTPS push. With CONFIG_MBEDTLS_DYNAMIC_BUFFER (esp32.yaml) each
+// TLS buffer is sized to one record: Grafana's largest is its certificate chain, 3174 B (measured with
+// `openssl s_client -tls1_2 -msg`, 2026-11-04), and what the ESP32 sends is cut at 4096 B. 8 KB is about
+// twice that. (With the fixed 16 KB receive buffer this had to be 32 KB, which a connected car's
+// fragmented heap never offered, so every push was skipped.) Below it the push waits for the next minute
+// (the buffer keeps its lines, bounded by MAX_BUFFER).
+constexpr size_t PUSH_MIN_BLOCK = 8 * 1024;
 
 // min_free_pct: the page's "Grafana skip below free memory" (% of the whole internal heap, as the
 // "Memory free" reading shows it); 0 = never skip, whatever the memory.
@@ -324,7 +328,25 @@ inline bool memory_for_push(float min_free_pct) {
   }
   const float free_pct = 100.0f * heap_caps_get_free_size(MALLOC_CAP_INTERNAL) /
                          heap_caps_get_total_size(MALLOC_CAP_INTERNAL);
-  return free_pct >= min_free_pct && heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) >= PUSH_MIN_BLOCK;
+  // The block in MALLOC_CAP_8BIT: what malloc (mbedTLS) can use. MALLOC_CAP_INTERNAL also counts IRAM,
+  // which only takes 32-bit accesses, so its largest block can be one mbedTLS cannot get.
+  return free_pct >= min_free_pct && heap_caps_get_largest_free_block(MALLOC_CAP_8BIT) >= PUSH_MIN_BLOCK;
+}
+
+// Allocations that failed since boot, in any task: the first sign of the memory running out, before
+// anything aborts or stops answering. Filled by a heap callback (on_boot), read by the minute log.
+struct AllocFailures {
+  std::atomic<uint32_t> count{0};
+  std::atomic<uint32_t> last_size{0};
+};
+inline AllocFailures &alloc_failures() {
+  static AllocFailures failures;
+  return failures;
+}
+// Runs inside the failing malloc: only counts (no logging, no allocation).
+inline void count_alloc_failure(size_t size, uint32_t /*caps*/, const char * /*function*/) {
+  alloc_failures().count++;
+  alloc_failures().last_size = size;
 }
 
 // "Basic base64(user:token)" for the Authorization header; built once, kept for the program's life.

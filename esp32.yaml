@@ -46,7 +46,11 @@ esphome:
   on_boot:
     # Before any page or API client connects: hide every car control and non-charging reading, and put
     # the car's charging readings in a "Tesla" section (esp32/device.h, arrange_page, says why).
-    priority: 800
+    # 600 (DATA), not higher: car_mac below is only read back from flash at 800 (globals, HARDWARE).
+    # At 800 this ran first, saw 0, never handed the car's address to Bluetooth, and the car stayed
+    # unconnected after every reboot until "Find car BT" was pressed. Still well before the Bluetooth
+    # client (300) and the web server (249).
+    priority: 600
     then:
       - lambda: |-
           volture_device::arrange_page(id(web_ui));

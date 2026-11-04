@@ -9,7 +9,7 @@
 substitutions:
   # The volture: block of secrets.yaml (settings of the control loop), e.g. ${volture_settings.poll_s}.
   volture_settings: !secret volture
-  # Firmware release. Each release states the minimum ESPHome version; keep pyproject.toml in sync.
+  # Firmware release. Each release states the ESPHome version it is built with; pyproject.toml says why ours is newer.
   tesla_ble_ref: v2026.10.1
   # The firmware needs a MAC to compile; this one matches no device. The real one is found from the VIN
   # at run time (esp32/car_finder.yaml).
@@ -72,6 +72,7 @@ esphome:
           // The car found on an earlier boot (esp32/car_finder.yaml); 0 = still to find.
           id(ble_tesla_id)->set_address(id(car_mac));
           id(car_status).publish_state(volture_car::status_text(id(car_mac)));
+          heap_caps_register_failed_alloc_callback(volture_device::count_alloc_failure);
 
 # A browser page left open but not read (a phone with the tab in the background) keeps its TCP
 # connection alive, and lwIP holds up to TCP_SND_BUF of unsent data for it until the phone closes it.
@@ -82,6 +83,13 @@ esp32:
   framework:
     sdkconfig_options:
       CONFIG_LWIP_TCP_SND_BUF_DEFAULT: "2880"
+      # The Grafana push (HTTPS) reserved a fixed 16 KB receive buffer for the whole connection; this
+      # sizes each TLS buffer to the record actually sent or received and frees it right after.
+      CONFIG_MBEDTLS_DYNAMIC_BUFFER: "y"
+
+# Only the car is ever connected over Bluetooth; ESPHome reserves 3 connections by default.
+esp32_ble:
+  max_connections: 1
 
 # The firmware defaults to DRIVER (unlock, open trunk...). volture only needs charging,
 # so the paired key gets the least-privileged role. Changing it later requires re-pairing.
@@ -564,13 +572,16 @@ interval:
                   volture_device::telemetry().buffer.empty()) {
                 return false;
               }
-              if (!volture_device::memory_for_push(id(grafana_skip_pct).state)) {
+              const bool enough = volture_device::memory_for_push(id(grafana_skip_pct).state);
+              const auto &failures = volture_device::alloc_failures();
+              ESP_LOGI("volture", "grafana push %s: heap_free=%u heap_block=%u alloc_failed=%u last_failed_size=%u",
+                       enough ? "starting" : "skipped", heap_caps_get_free_size(MALLOC_CAP_8BIT),
+                       heap_caps_get_largest_free_block(MALLOC_CAP_8BIT), (unsigned) failures.count.load(),
+                       (unsigned) failures.last_size.load());
+              if (!enough) {
                 id(grafana_status).publish_state("skipped: low memory");
-                ESP_LOGW("volture", "grafana push skipped: heap_free=%u heap_block=%u",
-                         heap_caps_get_free_size(MALLOC_CAP_8BIT), heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-                return false;
               }
-              return true;
+              return enough;
           then:
             - lambda: |-
                 id(grafana_body).swap(volture_device::telemetry().buffer);  // what is not sent now is lost

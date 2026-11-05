@@ -7,7 +7,9 @@
 * Works 100% locally
 * No internet required
 * No Home-assistant
-* Tesla is the master, Vulture takes the back seat
+* Tesla is the master, Vulture takes the back seat.
+* It only reads your car charging schedule to ensure it's always respected.
+
 
 ## Required Hardware
 

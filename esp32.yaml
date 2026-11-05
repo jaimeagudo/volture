@@ -98,6 +98,13 @@ esp32:
       # The Grafana push (HTTPS) reserved a fixed 16 KB receive buffer for the whole connection; this
       # sizes each TLS buffer to the record actually sent or received and frees it right after.
       CONFIG_MBEDTLS_DYNAMIC_BUFFER: "y"
+    advanced:
+      # The main loop runs the control cycle, the Grafana push (HTTPS) and the web page's live updates, and
+      # used up to ~7.8 KB of the 8 KB default with the car idle (measured 2026-11-05). On ESPHome 2026.10.2
+      # the device restarted every 20-60 minutes while charging, on memory found corrupted while the web page's
+      # live updates were sent from this stack (ESPHome 2026.10 sends them with ~2 KB more stack than 2026.9).
+      # 16 KB costs 8 KB of the ~42 KB free.
+      loop_task_stack_size: 16384
 
 # Only the car is ever connected over Bluetooth; ESPHome reserves 3 connections by default.
 esp32_ble:

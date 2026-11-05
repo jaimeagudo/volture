@@ -1,5 +1,5 @@
-# ESP32 firmware for volture: the yoziru/esphome-tesla-ble firmware, pulled from GitHub
-# and pinned to a release tag, plus the few settings this project needs.
+# ESP32 firmware for volture: the yoziru/esphome-tesla-ble firmware, pulled from GitHub and pinned to a
+# release (for now a fork of it, see external_components below), plus the few settings this project needs.
 #
 #   uv run esphome run esp32.yaml --device /dev/cu.usbserial-0001   # first flash, over USB
 #   uv run esphome run esp32.yaml --device volture.local          # later updates, over Wi-Fi
@@ -30,11 +30,23 @@ substitutions:
 
 packages:
   yoziru.esphome-tesla-ble:
-    url: https://github.com/yoziru/esphome-tesla-ble.git
-    ref: ${tesla_ble_ref}
+    url: https://github.com/jaimeagudo/esphome-tesla-ble.git
+    ref: cf31608430d9db9542a93b6cfd5da511281b8f83 # branch volture/v2026.10.1-schedule
     # Classic ESP32 (Elegoo board, chip ESP32-D0WD-V3, 4 MB flash).
     files: [tesla-ble-esp32-generic.dashboard.yml]
   volture.car_finder: !include esp32/car_finder.yaml
+
+# TODO back to yoziru's repositories (url above, and drop this block) once they accept reading the car's charge
+# schedule. Until then: the same release (tesla_ble_ref), plus that change only, from the forks
+# jaimeagudo/esphome-tesla-ble and jaimeagudo/tesla-ble (its packages/board.yml), pinned by commit.
+# The car's schedule lets Volture not resume a charge it paused once the schedule has ended (esp32/device.h, observe).
+external_components:
+  - source:
+      type: git
+      url: https://github.com/jaimeagudo/esphome-tesla-ble.git
+      ref: cf31608430d9db9542a93b6cfd5da511281b8f83 # branch volture/v2026.10.1-schedule
+      path: components
+    components: [tesla_ble_vehicle]
 
 esphome:
   name: volture
@@ -161,8 +173,9 @@ web_server:
 debug:
   update_interval: 5s
 
-# Network time, ONLY to timestamp the lines pushed to Grafana and for the daily reboot.
-# Never used by the control logic.
+# Network time: timestamps the lines pushed to Grafana, runs the daily reboot, and tells whether the car's
+# own charge schedule allows charging now (a charge Volture paused is not resumed outside it). Nothing
+# else in the control logic depends on it, and an unknown time never blocks anything.
 time:
   - platform: sntp
     id: sntp_time
@@ -453,7 +466,7 @@ script:
           if (!id(shelly_body).empty()) {
             shelly = volture_device::parse_shelly(id(shelly_body));
           }
-          auto observed = volture_device::observe();
+          auto observed = volture_device::observe(id(sntp_time).now());
           auto &loop = volture_device::loop();
           std::optional<volture::Reading> reading;  // the whole load, car included
           std::optional<volture::Reading> measured;  // what the Shelly itself measured (Grafana)
@@ -514,9 +527,11 @@ script:
             id(volture_event).publish_state(cycle.event);
           }
           // One key=value line per cycle (InfluxDB line protocol fields), for logs and remote storage later.
-          ESP_LOGI("volture", "volture power_w=%.0f,valid=%d,car_charging=%d,car_amps=%d,amps=%d,control=%d,reason=\"%s\",event=\"%s\"",
+          ESP_LOGI("volture", "volture power_w=%.0f,valid=%d,car_charging=%d,car_amps=%d,amps=%d,control=%d,in_schedule=%d,reason=\"%s\",event=\"%s\"",
                    reading ? reading->power_w : -1.0, valid, observed ? observed->charging : -1,
-                   observed ? observed->amps : -1, loop.ctrl.amps, id(volture_control).state, loop.ctrl.reason, cycle.event);
+                   observed ? observed->amps : -1, loop.ctrl.amps, id(volture_control).state,
+                   observed && observed->in_schedule ? static_cast<int>(*observed->in_schedule) : -1, loop.ctrl.reason,
+                   cycle.event);
           auto clock = id(sntp_time).now();
           if (id(grafana_push).state && clock.is_valid() && !std::string("${grafana_url}").empty()) {
             using namespace esphome;

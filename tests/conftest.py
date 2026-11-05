@@ -31,6 +31,7 @@ PYTHON = SimpleNamespace(
     can_charge=confirm.can_charge,
     external_change=confirm.external_change,
     reconcile=confirm.reconcile,
+    in_window=confirm.in_window,
 )
 
 
@@ -69,7 +70,7 @@ def car_token(state: Optional[CarState]) -> str:
     if state is None:
         return "-"
     return ",".join([flag(state.charging), str(state.amps), optional(state.plugged),
-                     optional(state.battery_pct), optional(state.limit_pct)])
+                     optional(state.battery_pct), optional(state.limit_pct), optional(state.in_schedule)])
 
 
 def pending_token(pending: Optional[Pending]) -> str:
@@ -155,6 +156,8 @@ def cpp_backend(binary: Path, processes: list[CliProcess]) -> SimpleNamespace:
         external_change=lambda pending, last, observed: shared.ask(
             f"external {pending_token(pending)} {car_token(last)} {car_token(observed)}") == "1",
         reconcile=reconcile,
+        in_window=lambda window, weekday, minute: shared.ask(
+            f"in_window {window.days} {optional(window.start_min)} {optional(window.end_min)} {weekday} {minute}") == "1",
     )
 
 

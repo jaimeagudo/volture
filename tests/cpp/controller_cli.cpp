@@ -8,10 +8,11 @@
 //   voltage <fallback_v> <volts|->          -> <volts used>   (effective_voltage)
 //   external <pending|-> <car|-> <car|->    -> 0|1
 //   can_charge <car|->                      -> 0|1
+//   in_window <days> <start|-> <end|-> <weekday> <minute>   -> 0|1
 //   reconcile <pending> <car|-> <now> <timeout_s> <max_attempts> -> <ACTION> <pending|->
 //   step <now> <power|-> <valid> <volts|-> <car|-> <control>   -> <resend|-> <command|-> <event> <reason> <dry_run>
 //                                              (Loop: one control cycle; cmd tokens are charging,amps)
-// where car = charging,amps,plugged,battery,limit   pending = charging,amps,sent_at,attempts
+// where car = charging,amps,plugged,battery,limit,in_schedule   pending = charging,amps,sent_at,attempts
 #include <cstdio>
 #include <iostream>
 #include <sstream>
@@ -47,7 +48,9 @@ std::optional<CarState> parse_car(const std::string &token) {
     return std::nullopt;
   }
   auto f = split(token, ',');
-  return CarState{f.at(0) == "1", std::stoi(f.at(1)), opt_bool(f.at(2)), opt_double(f.at(3)), opt_double(f.at(4))};
+  return CarState{f.at(0) == "1",         std::stoi(f.at(1)), opt_bool(f.at(2)),
+                  opt_double(f.at(3)),    opt_double(f.at(4)),
+                  opt_bool(f.at(5))};
 }
 
 std::optional<Pending> parse_pending(const std::string &token) {
@@ -102,7 +105,8 @@ int main() {
           auto kv = split(pair, '=');
           apply_config(cfg, kv.at(0), kv.at(1));
         }
-      } else if (op == "voltage" || op == "external" || op == "can_charge" || op == "reconcile") {
+      } else if (op == "voltage" || op == "external" || op == "can_charge" || op == "reconcile" ||
+                 op == "in_window") {
         std::vector<std::string> args;
         std::string token;
         while (in >> token) {
@@ -118,6 +122,12 @@ int main() {
           reply = external_change(parse_pending(args.at(0)), parse_car(args.at(1)), parse_car(args.at(2))) ? "1" : "0";
         } else if (op == "can_charge") {
           reply = can_charge(parse_car(args.at(0))) ? "1" : "0";
+        } else if (op == "in_window") {
+          auto opt_int = [](const std::string &token) {
+            return token == "-" ? std::nullopt : std::optional<int>(std::stoi(token));
+          };
+          const ScheduleWindow window{std::stoi(args.at(0)), opt_int(args.at(1)), opt_int(args.at(2))};
+          reply = in_window(window, std::stoi(args.at(3)), std::stoi(args.at(4))) ? "1" : "0";
         } else {
           auto [action, left] = reconcile(*parse_pending(args.at(0)), parse_car(args.at(1)), std::stod(args.at(2)),
                                           std::stod(args.at(3)), std::stoi(args.at(4)));

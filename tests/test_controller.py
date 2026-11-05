@@ -1,7 +1,7 @@
 """Control scenarios. Each test runs twice, against Python and against the C++ port (see conftest.py)."""
 from dataclasses import replace
 
-from volture.confirm import Action, CarState, Pending
+from volture.confirm import Action, CarState, Pending, ScheduleWindow
 from volture.controller import Command, Config, Reading
 
 from simulator.model import World
@@ -269,6 +269,44 @@ def test_can_charge(backend):
     assert not backend.can_charge(CarState(False, 0, True, battery_pct=80, limit_pct=80))
     assert backend.can_charge(CarState(False, 0, True, battery_pct=79, limit_pct=80))
     assert backend.can_charge(None)            # unknown never blocks: the car refuses itself
+    assert not backend.can_charge(CarState(False, 0, True, in_schedule=False))
+    assert backend.can_charge(CarState(False, 0, True, in_schedule=True))
+
+
+THU, FRI, SAT = 4, 5, 6              # weekday numbers, Sunday = 0
+TESLA_FRI, TESLA_ALL = 32, 127       # Tesla's day bits: Sunday = 1 ... Saturday = 64
+
+
+def test_in_window(backend):
+    # 2026-11-05: the car's 00:00-08:00 schedule. Volture paused at 07:59 and must not resume at 08:01.
+    night = ScheduleWindow(TESLA_ALL, 0, 480)
+    assert backend.in_window(night, THU, 7 * 60 + 59)
+    assert not backend.in_window(night, THU, 8 * 60 + 1)
+    assert not backend.in_window(night, THU, 8 * 60)          # the end minute is already outside
+    # The car reports the next window once one ends: Friday's, while it is still Thursday.
+    friday = ScheduleWindow(TESLA_FRI, 0, 480)
+    assert not backend.in_window(friday, THU, 3 * 60)
+    assert backend.in_window(friday, FRI, 3 * 60)
+    # Past midnight: belongs to the day it starts (Friday 22:00 to Saturday 06:00).
+    overnight = ScheduleWindow(TESLA_FRI, 22 * 60, 6 * 60)
+    assert backend.in_window(overnight, FRI, 23 * 60)
+    assert backend.in_window(overnight, SAT, 5 * 60)
+    assert not backend.in_window(overnight, SAT, 23 * 60)
+    assert not backend.in_window(overnight, FRI, 5 * 60)
+    # Without an end time the schedule never stops a charge; without a start, it runs from midnight.
+    assert backend.in_window(ScheduleWindow(TESLA_FRI, 0, None), THU, 12 * 60)
+    assert backend.in_window(ScheduleWindow(TESLA_ALL, None, 480), THU, 60)
+
+
+def test_no_resume_outside_car_schedule(backend):
+    # 2026-11-05 07:59: the house load forced a pause; at 08:01 there was room again, but the car's
+    # schedule had ended at 08:00. A start then would have charged on for hours.
+    ctrl = backend.Controller(CFG)
+    ctrl.follow_user(True, 5)
+    ctrl.tick(0, Reading(5000))                # Volture stops it: over the limit
+    after_schedule = backend.can_charge(CarState(False, 0, True, in_schedule=False))
+    ctrl.tick(10, Reading(650), car_can_charge=after_schedule)
+    assert ctrl.tick(600, Reading(650), car_can_charge=after_schedule) is None
 
 
 def test_external_change(backend):

@@ -96,7 +96,7 @@ class Controller:
 
     def tick(self, now: float, reading: Optional[Reading],
              car_can_charge: bool = True) -> Optional[Command]:
-        """car_can_charge: False when the car is unplugged or at its battery charge limit."""
+        """car_can_charge: False when the car is unplugged, at its battery charge limit or outside its own schedule."""
         c = self.cfg
         if reading is None or not reading.valid:
             self.low_since = None

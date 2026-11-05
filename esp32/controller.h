@@ -86,7 +86,7 @@ class Controller {
   // Why the last tick decided what it did, for observing the device (web page, logs). Static strings.
   const char *reason = "start";
 
-  // car_can_charge: false when the car is unplugged or at its battery charge limit.
+  // car_can_charge: false when the car is unplugged, at its battery charge limit or outside its own schedule.
   std::optional<Command> tick(double now, const std::optional<Reading> &reading, bool car_can_charge = true) {
     const Config &c = cfg_;
     if (!reading || !reading->valid) {
@@ -210,7 +210,30 @@ struct CarState {
   std::optional<bool> plugged;        // charge cable connected
   std::optional<double> battery_pct;  // state of charge
   std::optional<double> limit_pct;    // the car's charge limit (set in the car / Tesla app)
+  std::optional<bool> in_schedule;    // inside the car's own charge schedule now; nullopt: no schedule or unknown
 };
+
+// The car's charge schedule window (Tesla app > Schedule) that applies now or next.
+struct ScheduleWindow {
+  int days;                      // one bit per weekday, Tesla's: Sunday = 1, Monday = 2 ... Saturday = 64
+  std::optional<int> start_min;  // minutes after midnight; nullopt: no start time
+  std::optional<int> end_min;    // nullopt: no end time
+};
+
+// Whether local time (weekday 0 = Sunday, minute of the day) is inside the window. A window past
+// midnight (start after end) belongs to the day it starts. Without an end time the schedule never
+// stops a charge, so it never blocks one.
+inline bool in_window(const ScheduleWindow &window, int weekday, int minute) {
+  if (!window.end_min) {
+    return true;
+  }
+  const int start = window.start_min.value_or(0);
+  const auto on = [&window](int day) { return ((window.days >> (((day % 7) + 7) % 7)) & 1) != 0; };
+  if (start <= *window.end_min) {
+    return on(weekday) && minute >= start && minute < *window.end_min;
+  }
+  return (on(weekday) && minute >= start) || (on(weekday - 1) && minute < *window.end_min);
+}
 
 struct Pending {
   Command cmd;
@@ -239,13 +262,17 @@ inline bool external_change(const std::optional<Pending> &pending, const std::op
   return !pending || !matches(pending->cmd, *observed);
 }
 
-// False when starting is pointless: cable unplugged or battery at its charge limit.
+// False when starting is pointless or unwanted: cable unplugged, battery at its charge limit, or
+// outside the car's own charge schedule (a start sent then would override the schedule and charge on).
 // Unknown values do not block: the car itself refuses what it cannot do.
 inline bool can_charge(const std::optional<CarState> &state) {
   if (!state) {
     return true;
   }
   if (state->plugged.has_value() && !*state->plugged) {
+    return false;
+  }
+  if (state->in_schedule.has_value() && !*state->in_schedule) {
     return false;
   }
   if (state->battery_pct && state->limit_pct) {

@@ -13,6 +13,7 @@
 #include "esp_timer.h"
 #include "esphome/components/json/json_util.h"
 #include "esphome/core/alloc_helpers.h"
+#include "esphome/core/time.h"
 #include "esphome/core/application.h"
 #include "controller.h"
 
@@ -25,6 +26,11 @@ constexpr const char *CHARGER = "Charger";
 constexpr const char *CHARGING_AMPS = "Charging Amps";
 constexpr const char *CHARGING_LIMIT = "Charging Limit";
 constexpr const char *BATTERY = "Battery";
+// The car's charge schedule window (Tesla app > Schedule), from jaimeagudo/esphome-tesla-ble until yoziru's
+// has it: "HH:MM" or "none", and the days as "Sun,Mon,...".
+constexpr const char *SCHEDULE_START = "Charge Schedule Start";
+constexpr const char *SCHEDULE_END = "Charge Schedule End";
+constexpr const char *SCHEDULE_DAYS = "Charge Schedule Days";
 
 // Seconds since boot, from a 64-bit microsecond timer: millis() wraps after 49 days, this does not.
 inline double now_s() { return static_cast<double>(esp_timer_get_time()) / 1e6; }
@@ -80,15 +86,44 @@ inline std::optional<bool> plugged() {
   return cable->state;
 }
 
+inline std::string text_of(const char *name);
+
+// "HH:MM" to minutes after midnight; nullopt for anything else ("none", not reported).
+inline std::optional<int> minutes_of(const std::string &text) {
+  int hours = 0;
+  int minutes = 0;
+  if (std::sscanf(text.c_str(), "%d:%d", &hours, &minutes) != 2) {
+    return std::nullopt;
+  }
+  return hours * 60 + minutes;
+}
+
+// The car's schedule window as last reported; nullopt when it has none or has not reported it.
+inline std::optional<volture::ScheduleWindow> schedule_window() {
+  static const char *const DAY_NAMES[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+  const std::string days_text = text_of(SCHEDULE_DAYS);
+  int days = 0;
+  for (int day = 0; day < 7; day++) {
+    if (days_text.find(DAY_NAMES[day]) != std::string::npos) {
+      days |= 1 << day;
+    }
+  }
+  if (days == 0) {
+    return std::nullopt;
+  }
+  return volture::ScheduleWindow{days, minutes_of(text_of(SCHEDULE_START)), minutes_of(text_of(SCHEDULE_END))};
+}
+
 // The car's state as the firmware last reported it; nullopt until charging and amps are known.
-inline std::optional<volture::CarState> observe() {
+// clock: local time, only to tell whether the car's own schedule allows charging now (unknown if not valid).
+inline std::optional<volture::CarState> observe(const esphome::ESPTime &clock) {
   auto *charging = charger_switch();
   auto *amps = find<esphome::number::Number>(esphome::App.get_numbers(), CHARGING_AMPS);
   if (charging == nullptr || amps == nullptr || !amps->has_state()) {
     return std::nullopt;
   }
   volture::CarState state{charging->state, static_cast<int>(amps->state + 0.5f), std::nullopt, std::nullopt,
-                          std::nullopt};
+                          std::nullopt, std::nullopt};
   state.plugged = plugged();
   auto *battery = find<esphome::sensor::Sensor>(esphome::App.get_sensors(), BATTERY);
   if (battery != nullptr && battery->has_state()) {
@@ -97,6 +132,10 @@ inline std::optional<volture::CarState> observe() {
   auto *limit = find<esphome::number::Number>(esphome::App.get_numbers(), CHARGING_LIMIT);
   if (limit != nullptr && limit->has_state()) {
     state.limit_pct = limit->state;
+  }
+  const auto window = schedule_window();
+  if (window && clock.is_valid()) {
+    state.in_schedule = volture::in_window(*window, clock.day_of_week - 1, clock.hour * 60 + clock.minute);
   }
   return state;
 }

@@ -21,6 +21,33 @@ class CarState:
     plugged: Optional[bool] = None        # charge cable connected; None: not reported
     battery_pct: Optional[float] = None   # state of charge
     limit_pct: Optional[float] = None     # the car's charge limit (set in the car / Tesla app)
+    in_schedule: Optional[bool] = None    # inside the car's own charge schedule now; None: no schedule or unknown
+
+
+@dataclass(frozen=True)
+class ScheduleWindow:
+    """The car's charge schedule window (Tesla app > Schedule) that applies now or next."""
+    days: int                         # one bit per weekday, Tesla's: Sunday = 1, Monday = 2 ... Saturday = 64
+    start_min: Optional[int] = None   # minutes after midnight; None: no start time
+    end_min: Optional[int] = None     # None: no end time
+
+
+def in_window(window: ScheduleWindow, weekday: int, minute: int) -> bool:
+    """Whether local time (weekday 0 = Sunday, minute of the day) is inside the window.
+
+    A window past midnight (start after end) belongs to the day it starts. Without an end time the
+    schedule never stops a charge, so it never blocks one.
+    """
+    if window.end_min is None:
+        return True
+    start = window.start_min if window.start_min is not None else 0
+
+    def on(day: int) -> bool:
+        return bool(window.days >> (day % 7) & 1)
+
+    if start <= window.end_min:
+        return on(weekday) and start <= minute < window.end_min
+    return (on(weekday) and minute >= start) or (on(weekday - 1) and minute < window.end_min)
 
 
 @dataclass(frozen=True)
@@ -57,13 +84,16 @@ def external_change(pending: Optional["Pending"], last: Optional[CarState],
 
 
 def can_charge(state: Optional[CarState]) -> bool:
-    """False when starting is pointless: cable unplugged or battery at its charge limit.
+    """False when starting is pointless or unwanted: cable unplugged, battery at its charge limit, or
+    outside the car's own charge schedule (a start sent then would override the schedule and charge on).
 
     Unknown values do not block: the car itself refuses what it cannot do.
     """
     if state is None:
         return True
     if state.plugged is False:
+        return False
+    if state.in_schedule is False:
         return False
     if state.battery_pct is not None and state.limit_pct is not None:
         return state.battery_pct < state.limit_pct

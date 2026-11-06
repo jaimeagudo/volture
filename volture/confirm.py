@@ -35,16 +35,19 @@ class ScheduleWindow:
 def in_window(window: ScheduleWindow, weekday: int, minute: int) -> bool:
     """Whether local time (weekday 0 = Sunday, minute of the day) is inside the window.
 
-    A window past midnight (start after end) belongs to the day it starts. Without an end time the
-    schedule never stops a charge, so it never blocks one.
+    A window past midnight (start after end) belongs to the day it starts. Without an end time (e.g. a
+    weekend schedule "Saturday from 00:00"), the car charges from the start until the battery reaches
+    its limit, so the window runs from the start to the end of the next day (Saturday 00:00 to Sunday
+    23:59). Before the start it is outside: on Friday 08:01 the car reports Saturday's window as the
+    next one, and resuming then would charge on through Friday (2026-11-06).
     """
-    if window.end_min is None:
-        return True
     start = window.start_min if window.start_min is not None else 0
 
     def on(day: int) -> bool:
         return bool(window.days >> (day % 7) & 1)
 
+    if window.end_min is None:
+        return (on(weekday) and minute >= start) or on(weekday - 1)
     if start <= window.end_min:
         return on(weekday) and start <= minute < window.end_min
     return (on(weekday) and minute >= start) or (on(weekday - 1) and minute < window.end_min)

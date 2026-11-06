@@ -273,8 +273,8 @@ def test_can_charge(backend):
     assert backend.can_charge(CarState(False, 0, True, in_schedule=True))
 
 
-THU, FRI, SAT = 4, 5, 6              # weekday numbers, Sunday = 0
-TESLA_FRI, TESLA_ALL = 32, 127       # Tesla's day bits: Sunday = 1 ... Saturday = 64
+SUN, MON, THU, FRI, SAT = 0, 1, 4, 5, 6  # weekday numbers, Sunday = 0
+TESLA_FRI, TESLA_SAT, TESLA_ALL = 32, 64, 127  # Tesla's day bits: Sunday = 1 ... Saturday = 64
 
 
 def test_in_window(backend):
@@ -293,8 +293,15 @@ def test_in_window(backend):
     assert backend.in_window(overnight, SAT, 5 * 60)
     assert not backend.in_window(overnight, SAT, 23 * 60)
     assert not backend.in_window(overnight, FRI, 5 * 60)
-    # Without an end time the schedule never stops a charge; without a start, it runs from midnight.
-    assert backend.in_window(ScheduleWindow(TESLA_FRI, 0, None), THU, 12 * 60)
+    # Without an end time: from the start to the end of the next day. 2026-11-06, Friday 10:14: the car
+    # reported its weekend schedule (Saturday from 00:00, no end) as the next window.
+    weekend = ScheduleWindow(TESLA_SAT, 0, None)
+    assert not backend.in_window(weekend, FRI, 10 * 60 + 14)
+    assert backend.in_window(weekend, SAT, 0)
+    assert backend.in_window(weekend, SUN, 23 * 60 + 59)
+    assert not backend.in_window(weekend, MON, 60)
+    assert not backend.in_window(ScheduleWindow(TESLA_SAT, 22 * 60, None), SAT, 21 * 60)  # before the start
+    # Without a start, it runs from midnight.
     assert backend.in_window(ScheduleWindow(TESLA_ALL, None, 480), THU, 60)
 
 

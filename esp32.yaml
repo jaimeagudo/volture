@@ -55,6 +55,7 @@ esphome:
     - esp32/controller.h
     - esp32/device.h
     - esp32/car_finder.h
+    - esp32/boot_log.h
   on_boot:
     # Before any page or API client connects: hide every car control and non-charging reading, and put
     # the car's charging readings in a "Tesla" section (esp32/device.h, arrange_page, says why).
@@ -180,6 +181,14 @@ web_server:
 debug:
   update_interval: 5s
 
+logger:
+  # Error lines feed the boot list's crash field (esp32/boot_log.h). on_message, not a hand-registered
+  # listener: the logger only has room for the listeners declared here at build time.
+  on_message:
+    level: ERROR
+    then:
+      - lambda: volture_boot::on_error_log(tag, message);
+
 # Network time: timestamps the lines pushed to Grafana, runs the daily reboot, and tells whether the car's
 # own charge schedule allows charging now (a charge Volture paused is not resumed outside it). Nothing
 # else in the control logic depends on it, and an unknown time never blocks anything.
@@ -187,6 +196,20 @@ time:
   - platform: sntp
     id: sntp_time
     timezone: Europe/Madrid
+    # Boot list in Grafana (esp32/boot_log.h): one line per boot with its time, reset reason and, after a
+    # crash, where it crashed. Added once per boot, at the first clock sync with Grafana push on.
+    on_time_sync:
+      - lambda: |-
+          static bool boot_recorded = false;
+          const std::string reason = volture_device::text_of("Reset reason");
+          if (boot_recorded || !id(grafana_push).state || reason.empty() || !id(sntp_time).now().is_valid()) {
+            return;
+          }
+          const long long boot_us = static_cast<long long>(id(sntp_time).now().timestamp) * 1000000LL - esp_timer_get_time();
+          const std::string crash = volture_boot::crash_summary();
+          volture_device::telemetry().buffer += volture_boot::boot_line(reason, crash, boot_us);
+          boot_recorded = true;
+          ESP_LOGI("volture", "boot recorded for Grafana: reason=\"%s\" crash=\"%s\"", reason.c_str(), crash.c_str());
     on_time:
       - seconds: 0
         minutes: 0

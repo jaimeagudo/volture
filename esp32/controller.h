@@ -221,14 +221,17 @@ struct ScheduleWindow {
 };
 
 // Whether local time (weekday 0 = Sunday, minute of the day) is inside the window. A window past
-// midnight (start after end) belongs to the day it starts. Without an end time the schedule never
-// stops a charge, so it never blocks one.
+// midnight (start after end) belongs to the day it starts. Without an end time (e.g. a weekend
+// schedule "Saturday from 00:00"), the car charges from the start until the battery reaches its
+// limit, so the window runs from the start to the end of the next day (Saturday 00:00 to Sunday
+// 23:59). Before the start it is outside: on Friday 08:01 the car reports Saturday's window as the
+// next one, and resuming then would charge on through Friday (2026-11-06).
 inline bool in_window(const ScheduleWindow &window, int weekday, int minute) {
-  if (!window.end_min) {
-    return true;
-  }
   const int start = window.start_min.value_or(0);
   const auto on = [&window](int day) { return ((window.days >> (((day % 7) + 7) % 7)) & 1) != 0; };
+  if (!window.end_min) {
+    return (on(weekday) && minute >= start) || on(weekday - 1);
+  }
   if (start <= *window.end_min) {
     return on(weekday) && minute >= start && minute < *window.end_min;
   }

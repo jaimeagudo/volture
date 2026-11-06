@@ -854,7 +854,138 @@
         ]
       },
       "id": 11
+    },
+    {
+      "type": "table",
+      "title": "Boots",
+      "description": "Every ESP32 start: when, why (reset reason) and, after a crash, its reason and code addresses (decode with addr2line and that build's firmware.elf). The same moments show as purple marks on the charts.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 55,
+        "w": 24,
+        "h": 8
+      },
+      "interval": "1m",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "volture_boot_at * 1000",
+          "format": "table",
+          "refId": "A",
+          "range": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "groupBy",
+          "options": {
+            "fields": {
+              "Value": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "reason": {
+                "aggregations": [],
+                "operation": "groupby"
+              },
+              "crash": {
+                "aggregations": [],
+                "operation": "groupby"
+              }
+            }
+          }
+        },
+        {
+          "id": "sortBy",
+          "options": {
+            "sort": [
+              {
+                "field": "Value",
+                "desc": true
+              }
+            ]
+          }
+        },
+        {
+          "id": "organize",
+          "options": {
+            "indexByName": {
+              "Value": 0,
+              "reason": 1,
+              "crash": 2
+            },
+            "renameByName": {
+              "Value": "Boot",
+              "reason": "Reset reason",
+              "crash": "Crash"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Boot"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsLocal"
+              },
+              {
+                "id": "custom.width",
+                "value": 180
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Reset reason"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 220
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "id": 12
     }
   ],
-  "version": 1
+  "version": 1,
+  "annotations": {
+    "list": [
+      {
+        "name": "Boots",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "enable": true,
+        "iconColor": "purple",
+        "expr": "volture_boot_at * 1000",
+        "step": "60s",
+        "useValueForTime": true,
+        "titleFormat": "ESP32 boot: {{reason}}",
+        "textFormat": "{{crash}}"
+      }
+    ]
+  }
 }

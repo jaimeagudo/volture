@@ -148,6 +148,7 @@ volture/
 │   └── car.py            # SimHttpCar: the simulated car, same interface as EsphomeCar
 ├── esp32/controller.h    # C++ port of controller.py + confirm.py + main.py's cycle (Loop), standard library only
 ├── esp32/device.h        # ESP32 adapters: read the car's entities, parse the Shelly reply, send commands, Grafana lines
+├── esp32/boot_log.h      # The boot list for Grafana: when each boot happened, why, and where a crash was
 ├── esp32/grafana_ca.pem  # Grafana Cloud's root certificate (DigiCert Global Root G2), the only one the ESP32 trusts
 ├── tests/
 │   ├── test_controller.py  # Every scenario, run against Python and against the C++ port
@@ -377,6 +378,7 @@ Open `http://volture.local`, switch **Grafana push** on. Within 2 minutes **Graf
 | `volture_sent_charging`, `volture_sent_amps`, `volture_sent_attempts`            | Last command sent, and sends so far of the unconfirmed one (0: none pending)                                                                                                        |
 | `volture_state{reason, event, answer, status}`                                   | Labels: Volture's decision (`ramp`, `no_room`, `amps_cap`…), what happened to the command (`confirmed`, `resend`…), the car's answer to the last command, the car's charging status |
 | `volture_heap_free`, `volture_heap_block`, `volture_wifi_dbm`, `volture_ble_dbm` | ESP32 health                                                                                                                                                                        |
+| `volture_boot_at{reason, crash}`                                                 | One sample per ESP32 start, at the moment it started (value: that unix time). `reason`: reset reason (power-on, OTA, `exception/panic`, watchdog...); `crash`: after a crash, its reason and code addresses (`addr2line -pfiaC -e firmware.elf <addresses>` with that build's ELF), else `none` |
 
 **6. The dashboard:** `grafana/volture-dashboard.json` is a ready-made dashboard, phone-first (one panel per row):
 - **Now:** house power (*No Shelly* until one is installed), current the car draws, amps Volture decided, battery.
@@ -384,6 +386,7 @@ Open `http://volture.local`, switch **Grafana push** on. Within 2 minutes **Graf
 - **Amps:** Volture's decision, the car's setting, what the car draws, the last command sent, the house's total current; red line at the 20 A cap.
 - **Volture decision**, and **Car status and answer to the last command**: timelines of the labels on `volture_state`.
 - **Charging, cable, control**; **Battery** vs the car's charge limit; **ESP32 health** (memory, Wi-Fi, Bluetooth).
+- **Boots:** every ESP32 start with its time, reset reason and crash details; the same moments are purple marks on every chart.
 
 Import it: in your Grafana, **Dashboards** → **New** → **Import** → *Upload dashboard JSON file* → pick `grafana/volture-dashboard.json` → **Import**. It opens as *Volture* (`https://<stack>.grafana.net/d/volture/volture`). After changing it in Grafana, export it back (*Share* → *Export* → *Save to file*) over this file so the repository stays the source.
 

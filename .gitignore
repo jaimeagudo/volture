@@ -224,3 +224,4 @@ secrets.yaml
 .esphome/
 .tmp/
 .claude/
+private/

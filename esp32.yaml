@@ -19,6 +19,7 @@ substitutions:
   grafana_url: !secret grafana_url
   grafana_user: !secret grafana_user
   grafana_token: !secret grafana_token
+  grafana_dashboard_url: !secret grafana_dashboard_url
   # First-boot values of two settings editable on the page (kept across reboots afterwards):
   # local hour (0-23) of the daily reboot, only while the car is unplugged (-1 = never), and the free
   # memory % below which a Grafana push is skipped (0 = never skip).
@@ -324,6 +325,15 @@ text:
     optimistic: true
     restore_value: true
     initial_value: !secret shelly_url
+
+text_sensor:
+  - platform: template
+    name: "Grafana Dashboard URL"
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 2.5 }
+    icon: "mdi:open-in-new"
+    update_interval: never
+    lambda: |-
+      return std::string("${grafana_dashboard_url}");
 
 sensor:
   # Summary: where the power the Shelly measures goes (esp32/device.h, summary).

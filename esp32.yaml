@@ -19,6 +19,7 @@ substitutions:
   grafana_url: !secret grafana_url
   grafana_user: !secret grafana_user
   grafana_token: !secret grafana_token
+  grafana_dashboard_url: !secret grafana_dashboard_url
   # First-boot values of two settings editable on the page (kept across reboots afterwards):
   # local hour (0-23) of the daily reboot, only while the car is unplugged (-1 = never), and the free
   # memory % below which a Grafana push is skipped (0 = never skip).
@@ -457,6 +458,14 @@ binary_sensor:
 text_sensor:
   # Why the last start happened (power-on, software reset, panic, watchdog, brownout...): tells a
   # deliberate reboot from a crash when Uptime looks short.
+  - platform: template
+    id: grafana_dashboard_url_sensor
+    name: "Grafana Dashboard URL"
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 2.5 }
+    icon: "mdi:open-in-new"
+    initial_value: "${grafana_dashboard_url}"
+    update_interval: never
+
   - platform: debug
     reset_reason:
       name: Reset reason

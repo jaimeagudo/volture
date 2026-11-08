@@ -320,11 +320,20 @@ text:
   - platform: template
     id: shelly_url
     name: Shelly EM URL
-    web_server: { sorting_group_id: volture_settings, sorting_weight: 2 }
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 4 }
     mode: text
     optimistic: true
     restore_value: true
     initial_value: !secret shelly_url
+
+  - platform: template
+    id: grafana_dashboard_url
+    name: Grafana dashboard
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 4 }
+    mode: text
+    optimistic: true
+    restore_value: true
+    initial_value: !secret grafana_dashboard_url
 
 sensor:
   # Summary: where the power the Shelly measures goes (esp32/device.h, summary).
@@ -458,13 +467,14 @@ binary_sensor:
 text_sensor:
   # Why the last start happened (power-on, software reset, panic, watchdog, brownout...): tells a
   # deliberate reboot from a crash when Uptime looks short.
-  - platform: template
-    id: grafana_dashboard_url_sensor
-    name: "Grafana Dashboard URL"
-    web_server: { sorting_group_id: volture_settings, sorting_weight: 2.5 }
-    icon: "mdi:open-in-new"
-    initial_value: "${grafana_dashboard_url}"
-    update_interval: never
+  # - platform: template
+  #   id: grafana_dashboard_url_sensor
+  #   name: "Grafana Dashboard URL"
+  #   web_server: { sorting_group_id: volture_settings, sorting_weight: 2.5 }
+  #   icon: "mdi:open-in-new"
+  #   update_interval: never
+  #   lambda: |-
+  #     return std::string("${grafana_dashboard_url}");
 
   - platform: debug
     reset_reason:

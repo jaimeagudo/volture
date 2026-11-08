@@ -8,4 +8,26 @@
     '<a href="https://github.com/jaimeagudo/volture" target="_blank" rel="noopener" ' +
     'style="margin-left:auto;font:400 16px system-ui;color:inherit;opacity:.8">github.com/jaimeagudo/volture</a>';
   document.body.prepend(banner);
+
+  // Once the "Grafana Dashboard URL" state arrives over SSE, add a link into the banner.
+  // Avoids touching the Lit/Shadow-DOM component tree entirely.
+
+    var es = new EventSource("/events");
+    es.addEventListener("state", function (e) {
+      try {
+        var d = JSON.parse(e.data);
+        if (d.id !== "text/Grafana dashboard") return;
+        var url = (d.state || "").trim();
+        if (!url || url === "unknown") return;
+        es.close();
+        var a = document.createElement("a");
+        a.href = url;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.style.cssText = "font:400 16px system-ui;color:inherit;opacity:.8;text-decoration:none";
+        a.textContent = "Grafana dashboard \u2197";
+        banner.appendChild(a);
+      } catch (e) { console.error(e)}
+    });
+
 })();

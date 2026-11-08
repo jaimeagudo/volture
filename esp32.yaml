@@ -326,15 +326,6 @@ text:
     restore_value: true
     initial_value: !secret shelly_url
 
-text_sensor:
-  - platform: template
-    name: "Grafana Dashboard URL"
-    web_server: { sorting_group_id: volture_settings, sorting_weight: 2.5 }
-    icon: "mdi:open-in-new"
-    update_interval: never
-    lambda: |-
-      return std::string("${grafana_dashboard_url}");
-
 sensor:
   # Summary: where the power the Shelly measures goes (esp32/device.h, summary).
   - platform: template
@@ -471,6 +462,13 @@ text_sensor:
     reset_reason:
       name: Reset reason
       web_server: { sorting_group_id: volture_settings, sorting_weight: 4.5 }
+  - platform: template
+    name: "Grafana Dashboard URL"
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 2.5 }
+    icon: "mdi:open-in-new"
+    update_interval: never
+    lambda: |-
+      return std::string("${grafana_dashboard_url}");
   - platform: uptime
     name: Uptime
     web_server: { sorting_group_id: volture_settings, sorting_weight: 4 }

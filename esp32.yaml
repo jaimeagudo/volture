@@ -87,6 +87,9 @@ esphome:
           id(ble_tesla_id)->set_address(id(car_mac));
           id(car_status).publish_state(volture_car::status_text(id(car_mac)));
           heap_caps_register_failed_alloc_callback(volture_device::count_alloc_failure);
+          // The two Grafana buffers (esp32/device.h) are allocated once, now, while the heap is whole.
+          volture_device::reserve_buffer(volture_device::telemetry().buffer);
+          volture_device::reserve_buffer(id(grafana_body));
 
 # A browser page left open but not read (a phone with the tab in the background) keeps its TCP
 # connection alive, and lwIP holds up to TCP_SND_BUF of unsent data for it until the phone closes it.
@@ -231,7 +234,10 @@ switch:
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF # off until switched on; then kept across reboots
     on_turn_off:
-      - lambda: volture_device::telemetry() = volture_device::Telemetry(); # free the buffer
+      # Forget the lines but keep the reserved capacity: it is never freed, so it is never missing.
+      - lambda: |-
+          volture_device::telemetry().buffer.clear();
+          volture_device::telemetry().previous.reset();
   # Off (default): without a Shelly reading Volture sends nothing; the car carries on as it is.
   # On: it drops to min_amps, then stops after "Stop after no reading".
   - platform: template
@@ -480,6 +486,13 @@ text_sensor:
     reset_reason:
       name: Reset reason
       web_server: { sorting_group_id: volture_settings, sorting_weight: 4.5 }
+  - platform: template
+    name: "Grafana Dashboard URL"
+    web_server: { sorting_group_id: volture_settings, sorting_weight: 2.5 }
+    icon: "mdi:open-in-new"
+    update_interval: never
+    lambda: |-
+      return std::string("${grafana_dashboard_url}");
   - platform: uptime
     name: Uptime
     web_server: { sorting_group_id: volture_settings, sorting_weight: 4 }
@@ -638,10 +651,11 @@ interval:
               }
               const bool enough = volture_device::memory_for_push(id(grafana_skip_pct).state);
               const auto &failures = volture_device::alloc_failures();
-              ESP_LOGI("volture", "grafana push %s: heap_free=%u heap_block=%u alloc_failed=%u last_failed_size=%u",
+              ESP_LOGI("volture", "grafana push %s: heap_free=%u heap_block=%u alloc_failed=%u last_failed_size=%u buffer_capacity=%u/%u",
                        enough ? "starting" : "skipped", heap_caps_get_free_size(MALLOC_CAP_8BIT),
                        heap_caps_get_largest_free_block(MALLOC_CAP_8BIT), (unsigned) failures.count.load(),
-                       (unsigned) failures.last_size.load());
+                       (unsigned) failures.last_size.load(), (unsigned) volture_device::telemetry().buffer.capacity(),
+                       (unsigned) id(grafana_body).capacity());
               if (!enough) {
                 id(grafana_status).publish_state("skipped: low memory");
               }

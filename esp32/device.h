@@ -314,7 +314,9 @@ inline std::string sample_lines(const Sample &s, unsigned heap_free, unsigned he
 
 // Lines waiting for the next push. Bounded: when a push keeps failing, the oldest are dropped
 // rather than eating the memory the car link needs.
-constexpr size_t MAX_BUFFER = 8 * 1024;
+// It is also the capacity reserved once at boot (reserve_buffer): a std::string that grows by doubling
+// ends up holding up to 16 KB for good, and a growth that fails on a fragmented heap aborts the firmware.
+constexpr size_t MAX_BUFFER = 6 * 1024;
 
 struct Telemetry {
   std::optional<Sample> previous;
@@ -333,6 +335,17 @@ inline Telemetry &telemetry() {
 // cycle runs every second, and one line per second would overflow MAX_BUFFER between pushes.
 constexpr double MIN_SAMPLE_S = 5.0;
 
+// Upper bound of one sample's two lines (a typical sample is ~350 B).
+constexpr size_t MAX_SAMPLE_BYTES = 1024;
+
+// Reserves the whole capacity of a Grafana buffer. Called once at boot, when the heap is whole: from
+// then on the buffers (this one and the one swapped with it for each push) never allocate again.
+inline void reserve_buffer(std::string &buffer) {
+  if (buffer.capacity() < MAX_BUFFER) {
+    buffer.reserve(MAX_BUFFER);
+  }
+}
+
 inline void record(const Sample &sample, double now, unsigned heap_free, unsigned heap_block, float wifi_dbm,
                    float ble_dbm, long long unix_ns) {
   Telemetry &t = telemetry();
@@ -342,11 +355,22 @@ inline void record(const Sample &sample, double now, unsigned heap_free, unsigne
   if (t.previous && same(*t.previous, sample) && now - t.previous_at < 60.0) {
     return;
   }
-  t.buffer += sample_lines(sample, heap_free, heap_block, wifi_dbm, ble_dbm, unix_ns);
-  if (t.buffer.size() > MAX_BUFFER) {
-    const size_t cut = t.buffer.find('\n', t.buffer.size() - MAX_BUFFER);
+  // Only the sample's own text (~700 B) is allocated. When `new` fails the ESP32 build cannot even
+  // allocate the C++ exception, so it abort()s (reboot, "Reset reason: panic"): check the heap first.
+  if (heap_block < MAX_SAMPLE_BYTES) {
+    return;  // retried by the next cycle; the sample is lost, the firmware stays up
+  }
+  const std::string lines = sample_lines(sample, heap_free, heap_block, wifi_dbm, ble_dbm, unix_ns);
+  if (lines.size() > MAX_BUFFER) {
+    return;
+  }
+  // Drop the oldest whole lines so the new ones fit the reserved capacity: the buffer never reallocates.
+  if (t.buffer.size() + lines.size() > MAX_BUFFER) {
+    const size_t overflow = t.buffer.size() + lines.size() - MAX_BUFFER;
+    const size_t cut = t.buffer.find('\n', overflow - 1);
     t.buffer.erase(0, cut == std::string::npos ? t.buffer.size() : cut + 1);
   }
+  t.buffer += lines;
   t.previous = sample;
   t.previous_at = now;
 }

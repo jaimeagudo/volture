@@ -333,6 +333,21 @@ inline Telemetry &telemetry() {
 // cycle runs every second, and one line per second would overflow MAX_BUFFER between pushes.
 constexpr double MIN_SAMPLE_S = 5.0;
 
+// Upper bound of one sample's two lines (a typical sample is ~350 B).
+constexpr size_t MAX_SAMPLE_BYTES = 1024;
+
+// Whether appending one sample can be served by the heap's largest free block. Why: when `new` fails the
+// ESP32 build cannot even allocate the C++ exception, so it abort()s (reboot, "Reset reason: panic")
+// instead of throwing: a try/catch cannot help, and an HTTPS push in flight leaves only ~6 KB blocks.
+// Appending grows a std::string to max(2 x capacity, needed), so that is the block to check.
+inline bool room_to_buffer(const std::string &buffer, size_t heap_block) {
+  const size_t needed = buffer.size() + MAX_SAMPLE_BYTES;
+  if (needed <= buffer.capacity()) {
+    return heap_block >= MAX_SAMPLE_BYTES;  // only the line itself is allocated
+  }
+  return heap_block >= std::max(2 * buffer.capacity(), needed) + MAX_SAMPLE_BYTES;
+}
+
 inline void record(const Sample &sample, double now, unsigned heap_free, unsigned heap_block, float wifi_dbm,
                    float ble_dbm, long long unix_ns) {
   Telemetry &t = telemetry();
@@ -341,6 +356,9 @@ inline void record(const Sample &sample, double now, unsigned heap_free, unsigne
   }
   if (t.previous && same(*t.previous, sample) && now - t.previous_at < 60.0) {
     return;
+  }
+  if (!room_to_buffer(t.buffer, heap_block)) {
+    return;  // retried by the next cycle; the sample is lost, the firmware stays up
   }
   t.buffer += sample_lines(sample, heap_free, heap_block, wifi_dbm, ble_dbm, unix_ns);
   if (t.buffer.size() > MAX_BUFFER) {

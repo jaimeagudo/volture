@@ -2,16 +2,24 @@
 
 <img src="./assets/volture-logo.svg" width="300" alt="logo">
 
+**Carga tu Tesla en casa aprovechando cada amperio disponible, sin superar nunca el límite de potencia contratada de tu vivienda.**
+
 **Charge a Tesla at home scavenging every unused Amp without ever tripping the house's contracted power limit.**
 
-* Works 100% locally
+
+* No requiere conexión a internet.
+* No necesita Home Assistant.
+* No intrusivo, configuras una vez y te olvidas
+* Tu Tesla sigue dirigiendo la programación de carga
+
+
 * No internet required
 * No Home-assistant
-* Tesla is the master, Vulture takes the back seat.
-* It only reads your car charging schedule to ensure it's always respected.
+* Not intrusive, one time setup
+* Tesla is the master, Vulture takes the back seat (It only reads your Tesla charging schedule to ensure it's always respected.)
 
 
-## Required Hardware
+## Hardware necesario | Required Hardware
 
 * [Shelly EM](https://www.amazon.es/-/en/Shelly-Consumption-Monitoring-History-Compatible/dp/B0BL7VC2H7?tag=fatpitches-21)
 * [ESP32](https://link.amazon/B08bj02ET)
@@ -20,6 +28,34 @@
 | Phone                                      | Desktop                                       | Grafana                                    |
 | ------------------------------------------ | --------------------------------------------- | ------------------------------------------ |
 | ![Volture on a phone](./assets/mobile.gif) | ![Volture on a desktop](./assets/desktop.png) | ![Grafana on mobile](./assets/grafana.gif) |
+
+
+
+
+## Resumen rápido
+
+El ESP32 monitoriza el Shelly EM segundo a segundo, determina cuántos amperios puede consumir el vehículo en cada momento y se lo comunica al coche mediante Bluetooth Low Energy (BLE). Si se enciende algún electrodoméstico, la carga del vehículo se reduce para evitar superar el límite de potencia; cuando el electrodoméstico se apaga, la velocidad de carga aumenta de nuevo.
+
+## Instalación
+
+Necesitas: un ESP32 (versión clásica, con 4 MB de memoria flash), un Shelly EM Gen1 con su pinza amperimétrica, un Tesla, una red Wi-Fi de 2,4 GHz y un ordenador con puerto USB para realizar la carga inicial del firmware. Ambos dispositivos se comunican a través de Wi-Fi.
+
+* Coloca la pinza del Shelly EM en el punto adecuado para medir el consumo de corriente (ten en cuenta `shelly_includes_tesla`).
+* Sitúa el ESP32 lo más cerca posible del vehículo (ya que la comunicación se realiza mediante Bluetooth).
+
+## Software
+
+1. `git clone https://github.com/jaimeagudo/volture.git && cd volture && uv sync` ([uv](https://docs.astral.sh/uv/))
+2. `cp secrets.example.yaml secrets.yaml` y completa los datos: Wi-Fi, credenciales de acceso web y el VIN del vehículo ([paso 4](#4-fill-in-the-secrets)).
+3. Conecta el ESP32 mediante USB: `uv run esphome run esp32.yaml --device /dev/cu.usbserial-0001` ([paso 5](#5-flash-the-esp32-first-time-over-usb)).
+4. En el vehículo: accede a `http://volture.local`, pulsa **Pair BLE Key** (sección Tesla) y acerca la tarjeta llave a la consola central ([paso 6](#6-pair-the-esp32-with-the-car-in-the-car)).
+5. Instala el Shelly EM en la línea de alimentación principal e introduce su dirección en el campo **Shelly EM URL** de la página web ([paso 7](#7-install-the-shelly-em)).
+6. Activa la opción **Control** (en la configuración de Volture). Inicia la carga desde la aplicación de Tesla como de costumbre; Volture mantendrá el amperaje por debajo del límite establecido.
+
+> **Seguridad:** este dispositivo es un *gestor* de carga, no un dispositivo de protección. No sustituye al limitador de potencia de la compañía eléctrica ni a los interruptores automáticos (magnetotérmicos). Ante cualquier fallo, el sistema está diseñado para reducir la carga o detenerla por completo (consulta la sección [Fail-safe](#fail-safe)).
+
+
+# English 
 
 ## TL;DR
 

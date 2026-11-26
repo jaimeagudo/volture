@@ -54,7 +54,7 @@ Necesitas: un ESP32 (versión clásica, con 4 MB de memoria flash), un Shelly EM
 > **Seguridad:** este dispositivo es un *gestor* de carga, no un dispositivo de protección. No sustituye al limitador de potencia de la compañía eléctrica ni a los interruptores automáticos (magnetotérmicos). Ante cualquier fallo, el sistema está diseñado para reducir la carga o detenerla por completo (consulta la sección [Fail-safe](#fail-safe)).
 
 
-# English 
+# 🇬🇧 English 
 
 ## TL;DR
 

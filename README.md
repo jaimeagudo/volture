@@ -2,9 +2,7 @@
 
 <img src="./assets/volture-logo.svg" width="300" alt="logo">
 
-**Carga tu Tesla en casa aprovechando cada amperio disponible, sin superar nunca el límite de potencia contratada de tu vivienda.**
-
-**Charge a Tesla at home scavenging every unused Amp without ever tripping the house's contracted power limit.**
+# **Carga tu Tesla en casa aprovechando cada amperio disponible, sin superar nunca el límite de potencia contratada de tu vivienda.**
 
 
 * No requiere conexión a internet.
@@ -12,6 +10,7 @@
 * No intrusivo, configuras una vez y te olvidas
 * Tu Tesla sigue dirigiendo la programación de carga
 
+# 🇬🇧 **Charge a Tesla at home scavenging every unused Amp without ever tripping the house's contracted power limit.**
 
 * No internet required
 * No Home-assistant
